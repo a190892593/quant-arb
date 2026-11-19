@@ -1,0 +1,89 @@
+# ARBX 本地运行配置（第一阶段：Paper Trading，无真实下单/广播）
+#
+# 修改后重启 `arb-backend` 生效。所有金额单位 USDC，费率单位 bps（万分之一）。
+# 本文件不包含任何密钥；第一阶段不需要 CEX 下单 API Key。
+
+[server]
+host = "127.0.0.1"
+# 8787 已被本机其他服务占用，默认改用 8791；可用 ARBX_PORT 覆盖
+port = 8791
+ui_dir = "ui"
+cors = true
+
+[data]
+dir = "data"
+db_file = "arbx.db"
+keep_opportunities = 2000
+keep_risk_events = 5000
+
+[paper]
+# 审计资金基准 5,000 USDC（风控 §3）
+start_equity = 5000.0
+# DEX / CEX 资金分配：50:50 只是对比基准，不是最优结论（PRD §2.1）
+dex_share = 0.5
+# 扫描周期
+scan_interval_ms = 1500
+# 机会有效期上限 30 秒（风控 §5）
+opportunity_ttl_sec = 30
+# 是否自动执行机会；关闭后只能通过 API 手工触发
+auto_execute = true
+# 每轮扫描命中可执行机会后的执行概率（避免每轮都成交）
+execute_probability = 0.5
+# 研究规模档位（PRD §2.1：250–10,000 USDC 分档测试）
+notional_ladder = [250.0, 500.0, 1000.0, 2500.0]
+max_inflight = 3
+
+[feed]
+# demo：本地合成市场（离线、可复现）；live：预留给实时公共行情适配器
+mode = "demo"
+seed = 20261119
+tick_ms = 1000
+
+[cex]
+exchange = "binance"
+symbols = ["ETHUSDT", "BTCUSDT"]
+# 现货 taker/maker 费率（配置声明值）。fee_confirmed=false 时风控会拒绝生成可执行机会。
+taker_bps = 10.0
+maker_bps = 8.0
+fee_confirmed = true
+book_levels = 12
+
+[dex]
+# Gas 价格按链单独校准；此处为 Arbitrum 量级
+gas_price_gwei = 0.02
+native_price_usd = 2800.0
+gas_per_hop = 130000
+# 闪电贷费用必须来自实际协议数据；演示模式使用显式配置值
+flash_loan_fee_bps = 5.0
+flash_provider = "aave-v3"
+
+# 链注册表（第一阶段按数据可得性逐批准入）
+[[chains]]
+chain_id = 42161
+name = "Arbitrum"
+native = "ETH"
+rpc_primary = "https://arb1.arbitrum.io/rpc"
+rpc_secondary = "https://arbitrum.llamarpc.com"
+block_time_ms = 260
+stage = "PAPER_READY"
+gas_model = "L2 单向计费"
+
+[[chains]]
+chain_id = 8453
+name = "Base"
+native = "ETH"
+rpc_primary = "https://mainnet.base.org"
+rpc_secondary = "https://base.llamarpc.com"
+block_time_ms = 2000
+stage = "PAPER_READY"
+gas_model = "OP Stack L2 计费"
+
+[[chains]]
+chain_id = 1
+name = "Ethereum"
+native = "ETH"
+rpc_primary = "https://cloudflare-eth.com"
+rpc_secondary = "https://ethereum-rpc.publicnode.com"
+block_time_ms = 12000
+stage = "DATA_VALIDATED"
+gas_model = "EIP-1559 base + priority"

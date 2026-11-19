@@ -1,0 +1,112 @@
+/* ARBX · design tokens — see DESIGN.md for the contract */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg-0: oklch(12.4% 0.006 252);
+  --bg-1: oklch(15.2% 0.008 252);
+  --bg-2: oklch(17.6% 0.009 252);
+  --bg-3: oklch(21.2% 0.010 252);
+  --bg-4: oklch(24.5% 0.011 252);
+
+  /* hairlines */
+  --line-1: oklch(26.5% 0.010 252);
+  --line-2: oklch(33% 0.012 252);
+  --line-3: oklch(41% 0.014 252);
+
+  /* ink */
+  --ink-1: oklch(94% 0.004 252);
+  --ink-2: oklch(73% 0.008 252);
+  --ink-3: oklch(57% 0.010 252);
+  --ink-4: oklch(43% 0.010 252);
+
+  /* signal */
+  --accent: oklch(79% 0.115 196);
+  --accent-deep: oklch(62% 0.10 196);
+  --pos: oklch(80% 0.135 155);
+  --pos-deep: oklch(60% 0.11 155);
+  --neg: oklch(68% 0.165 25);
+  --neg-deep: oklch(52% 0.14 25);
+  --warn: oklch(82% 0.125 82);
+  --warn-deep: oklch(64% 0.11 82);
+
+  --accent-a12: oklch(79% 0.115 196 / 0.12);
+  --pos-a12: oklch(80% 0.135 155 / 0.13);
+  --neg-a12: oklch(68% 0.165 25 / 0.13);
+  --warn-a12: oklch(82% 0.125 82 / 0.13);
+
+  /* type */
+  --font-sans: "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Bahnschrift", "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI Variable Display", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, "SF Mono", monospace;
+
+  /* metrics */
+  --rail-w: 236px;
+  --top-h: 54px;
+  --r: 2px;
+  --ease: cubic-bezier(.2, .6, .2, 1);
+
+  --fs-label: 10.5px;
+  --fs-meta: 11.5px;
+  --fs-body: 12.5px;
+  --fs-title: 14.5px;
+  --fs-panel: 21px;
+  --fs-kpi: 30px;
+  --fs-hero: 44px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg-0);
+  color: var(--ink-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 { margin: 0; font-weight: 600; font-family: var(--font-display); }
+p { margin: 0; }
+dl, dd { margin: 0; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+table { border-collapse: collapse; }
+input { font: inherit; color: inherit; }
+
+::selection { background: oklch(79% 0.115 196 / .28); }
+
+/* numbers */
+.num, .mono, .tbl td.is-num, .tbl th.is-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+.warn { color: var(--warn); }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+
+/* focus */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r);
+}
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--line-2); border: 3px solid var(--bg-0); border-radius: 6px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--line-3); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}

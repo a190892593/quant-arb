@@ -1,0 +1,24 @@
+# 构建产物与本地数据不纳入版本控制
+/backend/target/
+/backend/.cargo/config.toml
+/data/
+/backups/
+/.build/
+*.log
+dom*.html
+probe.txt
+
+# 前端依赖与构建缓存（ui/ 由 frontend 构建后提交，保证克隆即可运行）
+/frontend/node_modules/
+/frontend/dist/
+/frontend/tsconfig.tsbuildinfo
+/frontend/*.log
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vs/
+.vscode/
+.idea/
