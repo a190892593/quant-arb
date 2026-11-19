@@ -7,6 +7,12 @@ import { QualityChip, StatusChip } from "../ui/Chip";
 
 type SortKey = "net" | "notional" | "stress" | "risk" | "age";
 
+/** 后端拒绝原因带完整小数位，表格里只留可读的一段 */
+const clip = (s: string, max = 26) => {
+  const tidy = s.replace(/(\d+\.\d{4})\d+/g, "$1").replace(/\s+/g, " ").trim();
+  return tidy.length > max ? tidy.slice(0, max) + "…" : tidy;
+};
+
 const sortVal = (o: Opportunity, k: SortKey) =>
   k === "risk" ? o.riskScore : k === "notional" ? o.notional : k === "age" ? o.ageMs : k === "stress" ? o.stressNet : o.net;
 
@@ -157,10 +163,9 @@ export function OppTable({
                   <td>
                     <StatusChip status={o.status} />
                     {o.reasons && o.reasons.length > 0 && (
-                      <div className="reasons">
-                        {o.reasons.slice(0, 2).map((r) => (
-                          <span key={r}>{r}</span>
-                        ))}
+                      <div className="reasons" title={o.reasons.join(" · ")}>
+                        <span>{clip(o.reasons[0])}</span>
+                        {o.reasons.length > 1 && <em>+{o.reasons.length - 1}</em>}
                       </div>
                     )}
                   </td>

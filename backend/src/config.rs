@@ -16,6 +16,7 @@ pub struct Config {
     pub feed: FeedConfig,
     pub cex: CexConfig,
     pub dex: DexConfig,
+    pub dex_engine: DexEngineConfig,
     pub chains: Vec<ChainSeed>,
 }
 
@@ -166,6 +167,76 @@ impl Default for DexConfig {
     }
 }
 
+/// DEX 多池多跳扫描引擎（PRD §4–§7）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DexEngineConfig {
+    /// 是否启用新引擎（关闭时回退到旧版三角/跨池扫描）。
+    pub enabled: bool,
+    pub min_hops: usize,
+    pub max_hops: usize,
+    pub max_pools: usize,
+    pub max_candidates: usize,
+    pub max_visits: u64,
+    pub max_elapsed_ms: u64,
+    pub min_input_usd: f64,
+    pub max_input_usd: f64,
+    pub min_pool_tvl_usd: f64,
+    pub max_pool_state_age_ms: i64,
+    /// 单池最多吃掉「一侧储备价值」的百分比（容量约束）。
+    pub max_pool_share_pct: f64,
+    pub grid_points: usize,
+    pub refine_iters: u32,
+    /// M3 压力模拟：池状态不利扰动（bps）与 Gas / 闪电贷费用上调（%）。
+    pub stress_bps: f64,
+    pub stress_gas_pct: f64,
+    pub stress_flash_pct: f64,
+    pub model_mismatch_max_bps: f64,
+    /// 增量扫描：报价超过该年龄强制重算（毫秒）。
+    pub requote_age_ms: i64,
+    /// 每 N 个区块强制重建一次路线集合。
+    pub full_rescan_blocks: u64,
+    pub gas_executor_base: u64,
+    pub gas_executor_per_hop: u64,
+    pub gas_transfer_per_hop: u64,
+    pub gas_flash_loan: u64,
+    pub gas_approve: u64,
+    pub base_symbols: Vec<String>,
+}
+
+impl Default for DexEngineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_hops: 2,
+            max_hops: 5,
+            max_pools: 5,
+            max_candidates: 100_000,
+            max_visits: 200_000,
+            max_elapsed_ms: 250,
+            min_input_usd: 50.0,
+            max_input_usd: 25_000.0,
+            min_pool_tvl_usd: 100_000.0,
+            max_pool_state_age_ms: 3_000,
+            max_pool_share_pct: 10.0,
+            grid_points: 14,
+            refine_iters: 16,
+            stress_bps: 25.0,
+            stress_gas_pct: 50.0,
+            stress_flash_pct: 50.0,
+            model_mismatch_max_bps: 50.0,
+            requote_age_ms: 800,
+            full_rescan_blocks: 30,
+            gas_executor_base: 45_000,
+            gas_executor_per_hop: 12_000,
+            gas_transfer_per_hop: 30_000,
+            gas_flash_loan: 90_000,
+            gas_approve: 50_000,
+            base_symbols: vec!["USDC".into(), "USDT".into()],
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChainSeed {
     pub chain_id: u64,
@@ -187,6 +258,7 @@ impl Default for Config {
             feed: FeedConfig::default(),
             cex: CexConfig::default(),
             dex: DexConfig::default(),
+            dex_engine: DexEngineConfig::default(),
             chains: vec![
                 ChainSeed {
                     chain_id: 42161,

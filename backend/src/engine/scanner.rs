@@ -87,7 +87,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         }
     }
 
-    let (opps, scanned_notional) = {
+    let (opps, dex_routes, dex_stats, dex_graph) = {
         let market = state.market.read().await;
         let prices = market.prices.clone();
         let head_block = market.head_block;
@@ -136,9 +136,37 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                 .scans
                 .is_multiple_of(2),
         };
-        let scanned_notional = cfg.notional_ladder.len();
+        // ---- DEX 多池多跳引擎（新）：图 → 搜索 → 优化 → 模拟 → 门禁 ----
         let risk = state.risk.read().await;
-        let mut all = state.strategy.scan(&view, &cfg, &ctx, &risk);
+        let (mut all, dex_routes, dex_stats, dex_graph) = if state.dex_params.enabled {
+            let mut cache = state.dex_cache.lock().await;
+            let out = crate::strategy::dex_scan::scan(&view, &state.dex_params, &ctx, &mut cache);
+            let mut all: Vec<Opportunity> = out
+                .opportunities
+                .into_iter()
+                .map(|o| state.strategy.apply_risk_and_score(&view, &ctx, &risk, o))
+                .collect();
+            // ---- CEX–DEX 双腿对冲（非原子，保持原有引擎）----
+            let mut cex_opps = state.strategy.scan_cex_dex(&view, &cfg, &ctx, &risk);
+            all.append(&mut cex_opps);
+            (all, out.routes, out.stats, out.graph)
+        } else {
+            // 回退路径：dex_engine.enabled = false 时使用旧版三角/跨池扫描。
+            let all = state.strategy.scan(&view, &cfg, &ctx, &risk);
+            let stats = crate::domain::dex_scan::ScanRunStats {
+                run_id: crate::domain::new_id("scan"),
+                reason: "旧引擎（dex_engine.enabled=false）".into(),
+                model_level: crate::domain::types::ModelLevel::M1,
+                ..Default::default()
+            };
+            // scan() 已包含 DEX 与 CEX–DEX，无需再调用 scan_cex_dex 以免重复。
+            (
+                all,
+                Vec::new(),
+                stats,
+                crate::domain::dex_scan::GraphStats::default(),
+            )
+        };
         drop(risk);
 
         // 去重：同策略 + 同规模 + 同路线只保留净利最高者
@@ -178,7 +206,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         }
         kept.sort_by(|a, b| b.conservative_net_profit.cmp(&a.conservative_net_profit));
 
-        (kept, scanned_notional)
+        (kept, dex_routes, dex_stats, dex_graph)
     };
 
     let actionable = opps.iter().filter(|o| o.status == OppStatus::Actionable).count();
@@ -199,6 +227,52 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
     }
     let _ = crate::db::repo::prune_opportunities(&state.db, state.config.data.keep_opportunities);
 
+    // ---- DEX 路线记录：内存 + 落库 + 推送 ----
+    {
+        // 只保留本轮快照：同一 route_id 的历史版本由数据库保留。
+        let mut store = state.dex_routes.write().await;
+        *store = dex_routes.iter().take(500).cloned().collect();
+    }
+    *state.dex_graph.write().await = dex_graph.clone();
+    *state.dex_scan_stats.write().await = dex_stats.clone();
+    {
+        let mut sims = state.simulations.write().await;
+        for r in dex_routes.iter().take(100) {
+            if let Some(s) = &r.simulation {
+                sims.insert(0, s.clone());
+            }
+            if let Some(s) = &r.stress {
+                sims.insert(0, s.clone());
+            }
+        }
+        if sims.len() > 1_000 {
+            sims.truncate(1_000);
+        }
+    }
+    if state.config.feed.mode != "silent" {
+        state.broadcast(WsEvent::Graph {
+            stats: Box::new(dex_graph.clone()),
+        });
+        for r in dex_routes.iter().take(20) {
+            state.broadcast(WsEvent::Route {
+                route: Box::new(r.clone()),
+            });
+        }
+        for r in dex_routes.iter().take(20) {
+            if let Some(s) = &r.simulation {
+                state.broadcast(WsEvent::Simulation {
+                    simulation: Box::new(s.clone()),
+                });
+            }
+        }
+    }
+    if let Err(e) = crate::db::repo::save_route_records(&state.db, &dex_routes) {
+        tracing::warn!("路线落库失败: {e}");
+    }
+    if let Err(e) = crate::db::repo::save_scan_run(&state.db, &dex_stats) {
+        tracing::warn!("扫描统计落库失败: {e}");
+    }
+
     // ---- 更新扫描状态 ----
     {
         let mut s = state.scanner.write().await;
@@ -211,7 +285,16 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         s.actionable += actionable as u64;
         s.rejected += rejected as u64;
         s.watch += watch as u64;
-        s.quotes += (scanned_notional * 3) as u64;
+        s.quotes = s.quotes.saturating_add(dex_stats.visits);
+        s.engine_routes = dex_stats.candidates as u64;
+        s.engine_candidates = dex_stats.candidates as u64;
+        s.engine_requoted = dex_stats.requoted as u64;
+        s.engine_reused = dex_stats.reused as u64;
+        s.engine_edges = dex_stats.edges as u64;
+        s.engine_tokens = dex_stats.tokens as u64;
+        s.engine_visits = dex_stats.visits;
+        s.engine_truncated = dex_stats.truncated;
+        s.engine_full_rescan = dex_stats.full_rescan;
         s.uptime_ms = s
             .started_at
             .map(|t| (now - t).num_milliseconds().max(0) as u64)

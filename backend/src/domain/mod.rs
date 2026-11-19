@@ -3,6 +3,7 @@
 //! 该层不依赖数据库、网络或 Axum，可被单元测试直接使用。
 //! 所有金额与数量使用 [`rust_decimal::Decimal`] 保证账本可核对。
 
+pub mod dex_scan;
 pub mod execution;
 pub mod ledger;
 pub mod market;

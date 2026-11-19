@@ -15,8 +15,8 @@ use arb_backend::domain::market::{
 use arb_backend::domain::money::dec;
 use arb_backend::domain::opportunity::{FundingSource, InventoryNeed, Opportunity};
 use arb_backend::domain::types::{
-    AccountKind, Direction, EntryKind, ExecutionState, HedgeOrder, OppStatus, Side, StrategyType,
-    VenueKind,
+    AccountKind, Direction, EntryKind, ExecutionState, HedgeOrder, OppStatus, OpportunityLifecycle,
+    StrategyType, VenueKind,
 };
 use arb_backend::ledger::{LedgerEngine, PostRequest};
 use arb_backend::paper::scenario::Scenario;
@@ -176,6 +176,8 @@ fn opportunity(route: DexRoute, qty: Decimal) -> Opportunity {
         book_age_ms: 10,
         quote_age_ms: 10,
         status: OppStatus::Actionable,
+        lifecycle: OpportunityLifecycle::Simulated,
+        route_fingerprint: None,
         rejections: vec![],
         capacity_usd: dec("5000"),
         funding: FundingSource::OwnCapital,

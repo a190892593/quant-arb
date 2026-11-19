@@ -5,7 +5,9 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use super::money::q6;
-pub use super::types::{ChainStage, DataQuality, ModelLevel, PoolKind, RiskSeverity, Side};
+pub use super::types::{
+    ChainStage, DataQuality, ModelLevel, PoolKind, RiskSeverity, Side, TokenStatus,
+};
 
 /// 链注册表条目（TDD §3.1）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,6 +58,8 @@ pub struct Token {
     pub decimals: u32,
     pub standard: String,
     pub code_hash: String,
+    /// 准入状态（PRD §3.3）。默认 UNKNOWN 不得进入高可信路线。
+    pub status: TokenStatus,
     pub risk_tags: Vec<String>,
     pub allowed_start: bool,
     pub allowed_hop: bool,

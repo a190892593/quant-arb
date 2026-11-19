@@ -12,7 +12,7 @@
 pub mod scenario;
 
 use chrono::{DateTime, Duration, Utc};
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -22,7 +22,7 @@ use crate::domain::execution::{
     UnwindRecord,
 };
 use crate::domain::ledger::LedgerEntry;
-use crate::domain::market::{CostBreakdown, DataQuality, Instrument, ModelLevel, OrderBook};
+use crate::domain::market::{CostBreakdown, Instrument, ModelLevel, OrderBook};
 use crate::domain::money::{bps_of, q8};
 use crate::domain::opportunity::{FundingSource, Opportunity};
 use crate::domain::plan::{

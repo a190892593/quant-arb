@@ -17,12 +17,19 @@ import type {
   ContractEvent,
   ContractTest,
   DataModel,
+  DexEngineParams,
+  DexEngineResponse,
+  DexGraphResponse,
   DexProtocol,
   EquityPoint,
   Exchange,
   Execution,
   ExecutionLeg,
   FlashLoan,
+  GasEstimate,
+  GraphStats,
+  InputOptimization,
+  InputPoint,
   Instrument,
   LedgerAccount,
   LedgerEntry,
@@ -33,8 +40,19 @@ import type {
   RiskEvent,
   RiskGroup,
   RiskParam,
+  RiskViolationRecord,
+  RouteCacheStats,
+  RouteLegRecord,
+  RouteLifecycle,
+  RouteScanRecord,
+  RouteScanResponse,
+  RouteType,
   RpcNode,
+  ScanRunStats,
   Service,
+  SimulationLevel,
+  SimulationOutcome,
+  SimulationStatus,
   StrategyId,
   TokenRow,
   Venue,
@@ -990,3 +1008,340 @@ export async function runAudit(dataset = "paper-sessions"): Promise<{ verdict: s
 }
 
 export type { DexProtocol };
+
+/* --------------------------- DEX route search ---------------------------- */
+/*
+ * GET /api/routes、/api/routes/{id}、/api/dex/graph、/api/scanner/engine
+ * 与 POST /api/simulations 的映射。金额字段是 Decimal 字符串，统一转 number。
+ */
+
+const strList = (v: unknown): string[] => arr<unknown>(v).map((x) => str(x));
+
+function mapGasEstimate(raw: unknown): GasEstimate | null {
+  if (!raw || typeof raw !== "object") return null;
+  const g = obj(raw);
+  return {
+    units: num(g.units),
+    gas_price_gwei: num(g.gas_price_gwei),
+    native_price_usd: num(g.native_price_usd),
+    usd: num(g.usd),
+    components: arr<Raw>(g.components).map((c) => ({
+      key: str(c.key),
+      label: str(c.label, str(c.key)),
+      units: num(c.units),
+    })),
+    block_number: num(g.block_number),
+    estimated_at: str(g.estimated_at),
+    note: str(g.note),
+  };
+}
+
+function mapInputPoint(raw: Raw): InputPoint {
+  return {
+    amount_in: num(raw.amount_in),
+    amount_in_usd: num(raw.amount_in_usd),
+    amount_out: num(raw.amount_out),
+    gross_usd: num(raw.gross_usd),
+    cost_usd: num(raw.cost_usd),
+    net_usd: num(raw.net_usd),
+    net_bps: num(raw.net_bps),
+    gas_usd: num(raw.gas_usd),
+    gas_share_pct: num(raw.gas_share_pct),
+    price_impact_bps: num(raw.price_impact_bps),
+    source: str(raw.source),
+  };
+}
+
+function mapOptimization(raw: unknown): InputOptimization | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = obj(raw);
+  return {
+    points: arr<Raw>(o.points).map(mapInputPoint),
+    best: o.best && typeof o.best === "object" ? mapInputPoint(obj(o.best)) : null,
+    min_profitable_amount: o.min_profitable_amount == null ? null : num(o.min_profitable_amount),
+    max_profitable_amount: o.max_profitable_amount == null ? null : num(o.max_profitable_amount),
+    max_executable_amount: num(o.max_executable_amount),
+    grid_points: num(o.grid_points),
+    refine_iters: num(o.refine_iters),
+    truncated: bool(o.truncated),
+    notes: strList(o.notes),
+  };
+}
+
+function mapSimulation(raw: unknown): SimulationOutcome | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = obj(raw);
+  return {
+    simulation_id: str(s.simulation_id),
+    level: str(s.level, "M1") as SimulationOutcome["level"],
+    status: str(s.status, "UNAVAILABLE") as SimulationStatus,
+    quoted_out: num(s.quoted_out),
+    simulated_out: num(s.simulated_out),
+    diff_bps: num(s.diff_bps),
+    net_usd: s.net_usd == null ? null : num(s.net_usd),
+    gas_estimate: mapGasEstimate(s.gas_estimate),
+    state_block: num(s.state_block),
+    notes: strList(s.notes),
+    created_at: str(s.created_at),
+  };
+}
+
+function mapViolation(raw: Raw): RiskViolationRecord {
+  return {
+    key: str(raw.key),
+    label: str(raw.label, str(raw.key)),
+    severity: str(raw.severity, "WARNING"),
+    limit: num(raw.limit),
+    actual: num(raw.actual),
+    unit: str(raw.unit),
+    message: str(raw.message),
+  };
+}
+
+function mapRouteLeg(raw: Raw): RouteLegRecord {
+  return {
+    idx: num(raw.idx),
+    pool_id: str(raw.pool_id),
+    protocol_id: str(raw.protocol_id),
+    amm: str(raw.amm),
+    token_in: str(raw.token_in),
+    token_out: str(raw.token_out),
+    amount_in: num(raw.amount_in),
+    amount_out: num(raw.amount_out),
+    fee_bps: num(raw.fee_bps),
+    price_impact_bps: num(raw.price_impact_bps),
+    gas_units: num(raw.gas_units),
+    pool_tvl_usd: num(raw.pool_tvl_usd),
+    block_number: num(raw.block_number),
+    state_age_ms: num(raw.state_age_ms),
+  };
+}
+
+function mapRouteScanRecord(raw: Raw): RouteScanRecord {
+  const fp = obj(raw.fingerprints);
+  return {
+    route_id: str(raw.route_id),
+    chain_id: num(raw.chain_id),
+    start_token: str(raw.start_token),
+    route_type: str(raw.route_type, "CROSS_POOL") as RouteType,
+    fingerprints: {
+      directed: str(fp.directed),
+      undirected: str(fp.undirected),
+      pool_sequence: str(fp.pool_sequence),
+      token_sequence: str(fp.token_sequence),
+      start_asset: str(fp.start_asset),
+    },
+    token_path: strList(raw.token_path),
+    pool_path: strList(raw.pool_path),
+    protocols: strList(raw.protocols),
+    amms: strList(raw.amms),
+    hops: num(raw.hops),
+    legs: arr<Raw>(raw.legs).map(mapRouteLeg),
+    amount_in: num(raw.amount_in),
+    amount_out: num(raw.amount_out),
+    notional_usd: num(raw.notional_usd),
+    gross_usd: num(raw.gross_usd),
+    total_cost_usd: num(raw.total_cost_usd),
+    net_usd: num(raw.net_usd),
+    net_bps: num(raw.net_bps),
+    embedded_fee_usd: num(raw.embedded_fee_usd),
+    gas: mapGasEstimate(raw.gas),
+    flash_funded: bool(raw.flash_funded),
+    optimization: mapOptimization(raw.optimization),
+    simulation: mapSimulation(raw.simulation),
+    stress: mapSimulation(raw.stress),
+    lifecycle: str(raw.lifecycle, "DISCOVERED") as RouteLifecycle,
+    rejections: arr<Raw>(raw.rejections).map(mapViolation),
+    block_number: num(raw.block_number),
+    quote_age_ms: num(raw.quote_age_ms),
+    detected_at: str(raw.detected_at),
+    expires_at: str(raw.expires_at),
+    model_level: str(raw.model_level, "M1") as RouteScanRecord["model_level"],
+    opportunity_id: raw.opportunity_id == null ? null : str(raw.opportunity_id),
+    capacity_usd: num(raw.capacity_usd),
+    source: str(raw.source, "full"),
+  };
+}
+
+function mapGraphStats(raw: unknown): GraphStats {
+  const g = obj(raw);
+  return {
+    chain_id: num(g.chain_id),
+    tokens: num(g.tokens),
+    approved_tokens: num(g.approved_tokens),
+    pools: num(g.pools),
+    eligible_pools: num(g.eligible_pools),
+    edges: num(g.edges),
+    rejected_pools: num(g.rejected_pools),
+    built_at: typeof g.built_at === "string" ? g.built_at : null,
+    signature: str(g.signature),
+  };
+}
+
+function mapScanRunStats(raw: unknown): ScanRunStats {
+  const s = obj(raw);
+  return {
+    run_id: str(s.run_id),
+    started_at: typeof s.started_at === "string" ? s.started_at : null,
+    elapsed_ms: num(s.elapsed_ms),
+    full_rescan: bool(s.full_rescan, true),
+    reason: str(s.reason),
+    pools: num(s.pools),
+    eligible_pools: num(s.eligible_pools),
+    tokens: num(s.tokens),
+    approved_tokens: num(s.approved_tokens),
+    edges: num(s.edges),
+    candidates: num(s.candidates),
+    requoted: num(s.requoted),
+    reused: num(s.reused),
+    visits: num(s.visits),
+    pruned_liquidity: num(s.pruned_liquidity),
+    pruned_risk: num(s.pruned_risk),
+    truncated: bool(s.truncated),
+    rejected_by_gate: num(s.rejected_by_gate),
+    profitable: num(s.profitable),
+    base_tokens: strList(s.base_tokens),
+    min_hops: num(s.min_hops, 2),
+    max_hops: num(s.max_hops, 5),
+    model_level: str(s.model_level, "M1") as ScanRunStats["model_level"],
+    notes: strList(s.notes),
+  };
+}
+
+function mapCacheStats(raw: unknown): RouteCacheStats {
+  const c = obj(raw);
+  return {
+    routes: num(c.routes),
+    topology_signature: str(c.topology_signature),
+    empty: typeof c.empty === "boolean" ? c.empty : undefined,
+  };
+}
+
+function mapEngineParams(raw: unknown): DexEngineParams {
+  const p = obj(raw);
+  const stress = obj(p.stress);
+  return {
+    model_note: str(p.model_note),
+    min_hops: num(p.min_hops, 2),
+    max_hops: num(p.max_hops, 5),
+    max_candidates: num(p.max_candidates),
+    max_visits: num(p.max_visits),
+    max_elapsed_ms: num(p.max_elapsed_ms),
+    min_input_usd: num(p.min_input_usd),
+    max_input_usd: num(p.max_input_usd),
+    min_pool_tvl_usd: num(p.min_pool_tvl_usd),
+    max_pool_state_age_ms: num(p.max_pool_state_age_ms),
+    max_pool_share_pct: num(p.max_pool_share_pct),
+    grid_points: num(p.grid_points),
+    refine_iters: num(p.refine_iters),
+    base_symbols: strList(p.base_symbols),
+    notional_ladder: arr<unknown>(p.notional_ladder).map((x) => num(x)),
+    flash_fee_bps: num(p.flash_fee_bps),
+    priority_fee_usd: num(p.priority_fee_usd),
+    delay_reserve_bps: num(p.delay_reserve_bps),
+    mev_reserve_bps: num(p.mev_reserve_bps),
+    profit_discount_pct: num(p.profit_discount_pct),
+    model_mismatch_max_bps: num(p.model_mismatch_max_bps),
+    requote_age_ms: num(p.requote_age_ms),
+    full_rescan_blocks: num(p.full_rescan_blocks),
+    ttl_sec: num(p.ttl_sec),
+    gas_price_gwei: num(p.gas_price_gwei),
+    native_price_usd: num(p.native_price_usd),
+    stress: {
+      adverse_bps: num(stress.adverse_bps),
+      gas_increase_pct: num(stress.gas_increase_pct),
+      flash_fee_increase_pct: num(stress.flash_fee_increase_pct),
+    },
+  };
+}
+
+export interface RouteQueryParams {
+  route_type?: RouteType;
+  lifecycle?: RouteLifecycle;
+  start_token?: string;
+  min_net?: number;
+  min_hops?: number;
+  max_hops?: number;
+  limit?: number;
+}
+
+/** GET /api/routes —— 路线集合、图层统计与本轮扫描统计。 */
+export async function routes(params: RouteQueryParams = {}): Promise<RouteScanResponse> {
+  const qs = new URLSearchParams();
+  if (params.route_type) qs.set("route_type", params.route_type);
+  if (params.lifecycle) qs.set("lifecycle", params.lifecycle);
+  if (params.start_token) qs.set("start_token", params.start_token);
+  if (params.min_net !== undefined) qs.set("min_net", String(params.min_net));
+  if (params.min_hops !== undefined) qs.set("min_hops", String(params.min_hops));
+  if (params.max_hops !== undefined) qs.set("max_hops", String(params.max_hops));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const raw = await get<Raw>(`/routes${suffix}`);
+  return {
+    total: num(raw.total),
+    routes: arr<Raw>(raw.routes).map(mapRouteScanRecord),
+    graph: mapGraphStats(raw.graph),
+    scan: mapScanRunStats(raw.scan),
+  };
+}
+
+/** GET /api/routes/{id} —— 单条路线的完整审计记录（含逐腿与优化曲线）。 */
+export async function routeDetail(routeId: string): Promise<RouteScanRecord> {
+  const raw = await get<Raw>(`/routes/${encodeURIComponent(routeId)}`);
+  return mapRouteScanRecord(raw);
+}
+
+/** GET /api/dex/graph —— 图层统计与增量缓存状态。 */
+export async function dexGraph(): Promise<DexGraphResponse> {
+  const raw = await get<Raw>("/dex/graph");
+  return {
+    graph: mapGraphStats(raw.graph),
+    scan: mapScanRunStats(raw.scan),
+    cache: mapCacheStats(raw.cache),
+  };
+}
+
+/** GET /api/scanner/engine —— 引擎参数、图层与最近一轮扫描统计。 */
+export async function scannerEngine(): Promise<DexEngineResponse> {
+  const raw = await get<Raw>("/scanner/engine");
+  return {
+    params: mapEngineParams(raw.params),
+    scan: mapScanRunStats(raw.scan),
+    graph: mapGraphStats(raw.graph),
+    cache: mapCacheStats(raw.cache),
+  };
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `${path} → HTTP ${res.status}`;
+    try {
+      const payload = obj(await res.json());
+      const err = payload.error;
+      if (typeof err === "string") message = err;
+      else if (err && typeof err === "object" && typeof obj(err).message === "string") {
+        message = str(obj(err).message);
+      }
+    } catch {
+      /* 非 JSON 错误响应 */
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as T;
+}
+
+/** POST /api/simulations —— 对已记录路线重新运行 M1 / M3（M2 返回 UNAVAILABLE）。 */
+export async function runSimulation(
+  routeId: string,
+  level: SimulationLevel,
+): Promise<SimulationOutcome> {
+  const raw = await postJson<Raw>("/simulations", { route_id: routeId, level });
+  const simulation = mapSimulation(raw.simulation);
+  if (!simulation) throw new Error("模拟响应缺少 simulation 字段");
+  return simulation;
+}

@@ -139,6 +139,10 @@ mod tests {
             "audit_reports",
             "inventory_snapshots",
             "scanner_state",
+            "dex_routes",
+            "route_fingerprints",
+            "simulations",
+            "scan_runs",
         ] {
             let n = db.count(table).unwrap_or(-1);
             assert!(n >= 0, "表 {table} 不存在");

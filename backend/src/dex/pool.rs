@@ -266,13 +266,7 @@ impl PoolRuntime {
     /// 预估 Gas（units）：V2 约 90k/跳，V3 约 130k/跳，StableSwap 约 150k，
     /// Weighted 约 180k。未验证池返回 0（不应进入执行）。
     pub fn gas_units(&self) -> u64 {
-        match self.pool.kind {
-            PoolKind::UniswapV2 => 90_000,
-            PoolKind::UniswapV3 => 130_000,
-            PoolKind::StableSwap => 150_000,
-            PoolKind::WeightedPool => 180_000,
-            PoolKind::Unknown => 0,
-        }
+        crate::dex::gas::amm_swap_units(self.pool.kind)
     }
 
     /// V3 原始单位即期价（token_out per token_in）。

@@ -556,3 +556,252 @@ export interface StrategyConfig {
   toggles: StrategyToggle[];
   history: { at: string; by: string; change: string }[];
 }
+
+/* ---------- DEX 多池多跳扫描（PRD §14.3 / §14.4） ---------- */
+/*
+ * 后端 /api/routes 的审计型记录。Decimal 以字符串传输，
+ * api.ts 在映射时统一转为 number（仅用于展示，不做二次金额计算）。
+ */
+
+export type RouteType = "CROSS_POOL" | "TRIANGLE" | "MULTI_HOP";
+export type RouteLifecycle =
+  | "DISCOVERED"
+  | "QUOTED"
+  | "PROFITABLE_ESTIMATE"
+  | "SIMULATED"
+  | "VERIFIED"
+  | "REJECTED"
+  | "EXPIRED"
+  | "FAILED";
+export type SimulationStatus = "PASSED" | "FAILED" | "UNAVAILABLE" | "MODEL_MISMATCH";
+export type ModelLevel = "M0" | "M1" | "M2" | "M3";
+export type SimulationLevel = "M1" | "M3" | "M2";
+
+export interface RouteFingerprints {
+  directed: string;
+  undirected: string;
+  pool_sequence: string;
+  token_sequence: string;
+  start_asset: string;
+}
+
+export interface GasComponent {
+  key: string;
+  label: string;
+  units: number;
+}
+
+export interface GasEstimate {
+  units: number;
+  gas_price_gwei: number;
+  native_price_usd: number;
+  usd: number;
+  components: GasComponent[];
+  block_number: number;
+  estimated_at: string;
+  note: string;
+}
+
+export interface InputPoint {
+  amount_in: number;
+  amount_in_usd: number;
+  amount_out: number;
+  gross_usd: number;
+  cost_usd: number;
+  net_usd: number;
+  net_bps: number;
+  gas_usd: number;
+  gas_share_pct: number;
+  price_impact_bps: number;
+  source: string;
+}
+
+export interface InputOptimization {
+  points: InputPoint[];
+  best: InputPoint | null;
+  min_profitable_amount: number | null;
+  max_profitable_amount: number | null;
+  max_executable_amount: number;
+  grid_points: number;
+  refine_iters: number;
+  truncated: boolean;
+  notes: string[];
+}
+
+export interface RouteLegRecord {
+  idx: number;
+  pool_id: string;
+  protocol_id: string;
+  amm: string;
+  token_in: string;
+  token_out: string;
+  amount_in: number;
+  amount_out: number;
+  fee_bps: number;
+  price_impact_bps: number;
+  gas_units: number;
+  pool_tvl_usd: number;
+  block_number: number;
+  state_age_ms: number;
+}
+
+export interface SimulationOutcome {
+  simulation_id: string;
+  level: ModelLevel;
+  status: SimulationStatus;
+  quoted_out: number;
+  simulated_out: number;
+  diff_bps: number;
+  net_usd: number | null;
+  gas_estimate: GasEstimate | null;
+  state_block: number;
+  notes: string[];
+  created_at: string;
+}
+
+export interface RiskViolationRecord {
+  key: string;
+  label: string;
+  severity: string;
+  limit: number;
+  actual: number;
+  unit: string;
+  message: string;
+}
+
+export interface RouteScanRecord {
+  route_id: string;
+  chain_id: number;
+  start_token: string;
+  route_type: RouteType;
+  fingerprints: RouteFingerprints;
+  token_path: string[];
+  pool_path: string[];
+  protocols: string[];
+  amms: string[];
+  hops: number;
+  legs: RouteLegRecord[];
+  amount_in: number;
+  amount_out: number;
+  notional_usd: number;
+  gross_usd: number;
+  total_cost_usd: number;
+  net_usd: number;
+  net_bps: number;
+  embedded_fee_usd: number;
+  gas: GasEstimate | null;
+  flash_funded: boolean;
+  optimization: InputOptimization | null;
+  simulation: SimulationOutcome | null;
+  stress: SimulationOutcome | null;
+  lifecycle: RouteLifecycle;
+  rejections: RiskViolationRecord[];
+  block_number: number;
+  quote_age_ms: number;
+  detected_at: string;
+  expires_at: string;
+  model_level: ModelLevel;
+  opportunity_id: string | null;
+  capacity_usd: number;
+  /** full：本轮全量重算；incremental：复用缓存（池状态未变）。 */
+  source: string;
+}
+
+export interface GraphStats {
+  chain_id: number;
+  tokens: number;
+  approved_tokens: number;
+  pools: number;
+  eligible_pools: number;
+  edges: number;
+  rejected_pools: number;
+  built_at: string | null;
+  signature: string;
+}
+
+export interface ScanRunStats {
+  run_id: string;
+  started_at: string | null;
+  elapsed_ms: number;
+  full_rescan: boolean;
+  reason: string;
+  pools: number;
+  eligible_pools: number;
+  tokens: number;
+  approved_tokens: number;
+  edges: number;
+  candidates: number;
+  requoted: number;
+  reused: number;
+  visits: number;
+  pruned_liquidity: number;
+  pruned_risk: number;
+  truncated: boolean;
+  rejected_by_gate: number;
+  profitable: number;
+  base_tokens: string[];
+  min_hops: number;
+  max_hops: number;
+  model_level: ModelLevel;
+  notes: string[];
+}
+
+export interface RouteCacheStats {
+  routes: number;
+  topology_signature: string;
+  empty?: boolean;
+}
+
+export interface RouteScanResponse {
+  total: number;
+  routes: RouteScanRecord[];
+  graph: GraphStats;
+  scan: ScanRunStats;
+}
+
+export interface DexGraphResponse {
+  graph: GraphStats;
+  scan: ScanRunStats;
+  cache: RouteCacheStats;
+}
+
+export interface DexEngineParams {
+  model_note: string;
+  min_hops: number;
+  max_hops: number;
+  max_candidates: number;
+  max_visits: number;
+  max_elapsed_ms: number;
+  min_input_usd: number;
+  max_input_usd: number;
+  min_pool_tvl_usd: number;
+  max_pool_state_age_ms: number;
+  max_pool_share_pct: number;
+  grid_points: number;
+  refine_iters: number;
+  base_symbols: string[];
+  notional_ladder: number[];
+  flash_fee_bps: number;
+  priority_fee_usd: number;
+  delay_reserve_bps: number;
+  mev_reserve_bps: number;
+  profit_discount_pct: number;
+  model_mismatch_max_bps: number;
+  requote_age_ms: number;
+  full_rescan_blocks: number;
+  ttl_sec: number;
+  gas_price_gwei: number;
+  native_price_usd: number;
+  stress: {
+    adverse_bps: number;
+    gas_increase_pct: number;
+    flash_fee_increase_pct: number;
+  };
+}
+
+export interface DexEngineResponse {
+  params: DexEngineParams;
+  scan: ScanRunStats;
+  graph: GraphStats;
+  cache: RouteCacheStats;
+}

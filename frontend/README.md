@@ -79,3 +79,57 @@ src/
 - WS `opportunity.new` / `risk.event` / `paper.order` → 推送到 store，组件被动重渲染
 
 页面组件不感知数据来源，所以接口就绪后不需要改视图。
+
+---
+
+## 联调状态（对接 `backend/` Axum API）
+
+前端已接上本地后端，页面显示的是 Paper 账本的真实数据，不再是硬编码演示值。
+
+**运行方式**
+
+```powershell
+cd frontend
+npm run build      # 产出 dist/
+npm run publish    # dist/ → 仓库根 ui/（后端 ui_dir 指向这里）
+cd ..; .\scripts\start.ps1 -Open
+```
+
+后端 `config/default.toml` 的 `ui_dir = "ui"`，`http://127.0.0.1:8791` 同时提供 API 与前端。
+开发时可用 `npm run dev`（Vite 5173），需要把 `/api` 代理到 8791（见 `vite.config.ts`）。
+
+**接口映射**（`src/data/api.ts`）
+
+| 前端集合 | 后端接口 |
+|---|---|
+| `scanner` | `GET /api/scanner/status` |
+| `opps` | `GET /api/opportunities`（`dex_route.legs` / `costs.items` / `risk_score.components` 展开） |
+| `executions` | `GET /api/executions` |
+| `series` / `equity` / `startEquity` | `GET /api/paper/performance` |
+| `venues` | `GET /api/paper/accounts`（按 venue 聚合余额） |
+| `ledger` / `ledgerAccounts` / `flashLoans` | `GET /api/ledger` |
+| `instruments` / `cexIntegrity` / `health` | `GET /api/markets/data-health` + `GET /api/exchanges/{id}/instruments` |
+| `riskStatus` / `riskParams` / `riskGroups` | `GET /api/risk/status`、`/api/risk/params` |
+| `circuitRules` | `GET /api/risk/rules` |
+| `pools` / `tokens` / `adapters` | `GET /api/dex/pools`、`/api/tokens`、`/api/dex/protocols` |
+| `chains` / `services` | `GET /api/chains`、`/api/system/status` |
+| `auditJobs` | `GET /api/audit/jobs` |
+| `contractComponents` / `Tests` / `Events` | `GET /api/contract/status` |
+
+**轮询**：`startPolling()` 默认 3 s 一次全量快照，页面隐藏时暂停；失败时保留最后一份有效数据并在顶栏标记离线。
+
+**写操作**（`src/data/index.ts` 的 `actions`，唯一会改变后端状态的地方）
+
+| 动作 | 接口 |
+|---|---|
+| 扫描启停（两页共享一个引擎） | `POST /api/scanner/start` / `stop` |
+| 全局暂停 / 恢复 | `POST /api/risk/pause` / `resume` |
+| 生成并执行 Paper 计划 | `POST /api/opportunities/{id}/execute` |
+| 重置 Paper 账户 | `POST /api/paper/reset` |
+| 发起历史审计 | `POST /api/audit/jobs` |
+
+**已知限制**
+
+- 后端 demo feed 只产出 DEX 原子机会，`CEX–DEX 扫描` 当前为 0 条（页面显示空状态，不是故障）。
+- 拒绝原因在表格里截断为一行，完整文本在行悬停 `title` 中。
+- 重启后端后扫描器为 `STOPPED`，需在页面点「启动扫描」或调 `/api/scanner/start`。

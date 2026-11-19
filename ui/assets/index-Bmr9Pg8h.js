@@ -22266,6 +22266,292 @@ async function runAudit(dataset = "paper-sessions") {
   const body = await res.json();
   return body.report ?? { verdict: "WATCH", reason: "已提交" };
 }
+const strList = (v) => arr(v).map((x) => str(x));
+function mapGasEstimate(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const g = obj(raw);
+  return {
+    units: num$1(g.units),
+    gas_price_gwei: num$1(g.gas_price_gwei),
+    native_price_usd: num$1(g.native_price_usd),
+    usd: num$1(g.usd),
+    components: arr(g.components).map((c) => ({
+      key: str(c.key),
+      label: str(c.label, str(c.key)),
+      units: num$1(c.units)
+    })),
+    block_number: num$1(g.block_number),
+    estimated_at: str(g.estimated_at),
+    note: str(g.note)
+  };
+}
+function mapInputPoint(raw) {
+  return {
+    amount_in: num$1(raw.amount_in),
+    amount_in_usd: num$1(raw.amount_in_usd),
+    amount_out: num$1(raw.amount_out),
+    gross_usd: num$1(raw.gross_usd),
+    cost_usd: num$1(raw.cost_usd),
+    net_usd: num$1(raw.net_usd),
+    net_bps: num$1(raw.net_bps),
+    gas_usd: num$1(raw.gas_usd),
+    gas_share_pct: num$1(raw.gas_share_pct),
+    price_impact_bps: num$1(raw.price_impact_bps),
+    source: str(raw.source)
+  };
+}
+function mapOptimization(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const o = obj(raw);
+  return {
+    points: arr(o.points).map(mapInputPoint),
+    best: o.best && typeof o.best === "object" ? mapInputPoint(obj(o.best)) : null,
+    min_profitable_amount: o.min_profitable_amount == null ? null : num$1(o.min_profitable_amount),
+    max_profitable_amount: o.max_profitable_amount == null ? null : num$1(o.max_profitable_amount),
+    max_executable_amount: num$1(o.max_executable_amount),
+    grid_points: num$1(o.grid_points),
+    refine_iters: num$1(o.refine_iters),
+    truncated: bool(o.truncated),
+    notes: strList(o.notes)
+  };
+}
+function mapSimulation(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const s = obj(raw);
+  return {
+    simulation_id: str(s.simulation_id),
+    level: str(s.level, "M1"),
+    status: str(s.status, "UNAVAILABLE"),
+    quoted_out: num$1(s.quoted_out),
+    simulated_out: num$1(s.simulated_out),
+    diff_bps: num$1(s.diff_bps),
+    net_usd: s.net_usd == null ? null : num$1(s.net_usd),
+    gas_estimate: mapGasEstimate(s.gas_estimate),
+    state_block: num$1(s.state_block),
+    notes: strList(s.notes),
+    created_at: str(s.created_at)
+  };
+}
+function mapViolation(raw) {
+  return {
+    key: str(raw.key),
+    label: str(raw.label, str(raw.key)),
+    severity: str(raw.severity, "WARNING"),
+    limit: num$1(raw.limit),
+    actual: num$1(raw.actual),
+    unit: str(raw.unit),
+    message: str(raw.message)
+  };
+}
+function mapRouteLeg(raw) {
+  return {
+    idx: num$1(raw.idx),
+    pool_id: str(raw.pool_id),
+    protocol_id: str(raw.protocol_id),
+    amm: str(raw.amm),
+    token_in: str(raw.token_in),
+    token_out: str(raw.token_out),
+    amount_in: num$1(raw.amount_in),
+    amount_out: num$1(raw.amount_out),
+    fee_bps: num$1(raw.fee_bps),
+    price_impact_bps: num$1(raw.price_impact_bps),
+    gas_units: num$1(raw.gas_units),
+    pool_tvl_usd: num$1(raw.pool_tvl_usd),
+    block_number: num$1(raw.block_number),
+    state_age_ms: num$1(raw.state_age_ms)
+  };
+}
+function mapRouteScanRecord(raw) {
+  const fp = obj(raw.fingerprints);
+  return {
+    route_id: str(raw.route_id),
+    chain_id: num$1(raw.chain_id),
+    start_token: str(raw.start_token),
+    route_type: str(raw.route_type, "CROSS_POOL"),
+    fingerprints: {
+      directed: str(fp.directed),
+      undirected: str(fp.undirected),
+      pool_sequence: str(fp.pool_sequence),
+      token_sequence: str(fp.token_sequence),
+      start_asset: str(fp.start_asset)
+    },
+    token_path: strList(raw.token_path),
+    pool_path: strList(raw.pool_path),
+    protocols: strList(raw.protocols),
+    amms: strList(raw.amms),
+    hops: num$1(raw.hops),
+    legs: arr(raw.legs).map(mapRouteLeg),
+    amount_in: num$1(raw.amount_in),
+    amount_out: num$1(raw.amount_out),
+    notional_usd: num$1(raw.notional_usd),
+    gross_usd: num$1(raw.gross_usd),
+    total_cost_usd: num$1(raw.total_cost_usd),
+    net_usd: num$1(raw.net_usd),
+    net_bps: num$1(raw.net_bps),
+    embedded_fee_usd: num$1(raw.embedded_fee_usd),
+    gas: mapGasEstimate(raw.gas),
+    flash_funded: bool(raw.flash_funded),
+    optimization: mapOptimization(raw.optimization),
+    simulation: mapSimulation(raw.simulation),
+    stress: mapSimulation(raw.stress),
+    lifecycle: str(raw.lifecycle, "DISCOVERED"),
+    rejections: arr(raw.rejections).map(mapViolation),
+    block_number: num$1(raw.block_number),
+    quote_age_ms: num$1(raw.quote_age_ms),
+    detected_at: str(raw.detected_at),
+    expires_at: str(raw.expires_at),
+    model_level: str(raw.model_level, "M1"),
+    opportunity_id: raw.opportunity_id == null ? null : str(raw.opportunity_id),
+    capacity_usd: num$1(raw.capacity_usd),
+    source: str(raw.source, "full")
+  };
+}
+function mapGraphStats(raw) {
+  const g = obj(raw);
+  return {
+    chain_id: num$1(g.chain_id),
+    tokens: num$1(g.tokens),
+    approved_tokens: num$1(g.approved_tokens),
+    pools: num$1(g.pools),
+    eligible_pools: num$1(g.eligible_pools),
+    edges: num$1(g.edges),
+    rejected_pools: num$1(g.rejected_pools),
+    built_at: typeof g.built_at === "string" ? g.built_at : null,
+    signature: str(g.signature)
+  };
+}
+function mapScanRunStats(raw) {
+  const s = obj(raw);
+  return {
+    run_id: str(s.run_id),
+    started_at: typeof s.started_at === "string" ? s.started_at : null,
+    elapsed_ms: num$1(s.elapsed_ms),
+    full_rescan: bool(s.full_rescan, true),
+    reason: str(s.reason),
+    pools: num$1(s.pools),
+    eligible_pools: num$1(s.eligible_pools),
+    tokens: num$1(s.tokens),
+    approved_tokens: num$1(s.approved_tokens),
+    edges: num$1(s.edges),
+    candidates: num$1(s.candidates),
+    requoted: num$1(s.requoted),
+    reused: num$1(s.reused),
+    visits: num$1(s.visits),
+    pruned_liquidity: num$1(s.pruned_liquidity),
+    pruned_risk: num$1(s.pruned_risk),
+    truncated: bool(s.truncated),
+    rejected_by_gate: num$1(s.rejected_by_gate),
+    profitable: num$1(s.profitable),
+    base_tokens: strList(s.base_tokens),
+    min_hops: num$1(s.min_hops, 2),
+    max_hops: num$1(s.max_hops, 5),
+    model_level: str(s.model_level, "M1"),
+    notes: strList(s.notes)
+  };
+}
+function mapCacheStats(raw) {
+  const c = obj(raw);
+  return {
+    routes: num$1(c.routes),
+    topology_signature: str(c.topology_signature),
+    empty: typeof c.empty === "boolean" ? c.empty : void 0
+  };
+}
+function mapEngineParams(raw) {
+  const p = obj(raw);
+  const stress = obj(p.stress);
+  return {
+    model_note: str(p.model_note),
+    min_hops: num$1(p.min_hops, 2),
+    max_hops: num$1(p.max_hops, 5),
+    max_candidates: num$1(p.max_candidates),
+    max_visits: num$1(p.max_visits),
+    max_elapsed_ms: num$1(p.max_elapsed_ms),
+    min_input_usd: num$1(p.min_input_usd),
+    max_input_usd: num$1(p.max_input_usd),
+    min_pool_tvl_usd: num$1(p.min_pool_tvl_usd),
+    max_pool_state_age_ms: num$1(p.max_pool_state_age_ms),
+    max_pool_share_pct: num$1(p.max_pool_share_pct),
+    grid_points: num$1(p.grid_points),
+    refine_iters: num$1(p.refine_iters),
+    base_symbols: strList(p.base_symbols),
+    notional_ladder: arr(p.notional_ladder).map((x) => num$1(x)),
+    flash_fee_bps: num$1(p.flash_fee_bps),
+    priority_fee_usd: num$1(p.priority_fee_usd),
+    delay_reserve_bps: num$1(p.delay_reserve_bps),
+    mev_reserve_bps: num$1(p.mev_reserve_bps),
+    profit_discount_pct: num$1(p.profit_discount_pct),
+    model_mismatch_max_bps: num$1(p.model_mismatch_max_bps),
+    requote_age_ms: num$1(p.requote_age_ms),
+    full_rescan_blocks: num$1(p.full_rescan_blocks),
+    ttl_sec: num$1(p.ttl_sec),
+    gas_price_gwei: num$1(p.gas_price_gwei),
+    native_price_usd: num$1(p.native_price_usd),
+    stress: {
+      adverse_bps: num$1(stress.adverse_bps),
+      gas_increase_pct: num$1(stress.gas_increase_pct),
+      flash_fee_increase_pct: num$1(stress.flash_fee_increase_pct)
+    }
+  };
+}
+async function routes(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.route_type) qs.set("route_type", params.route_type);
+  if (params.lifecycle) qs.set("lifecycle", params.lifecycle);
+  if (params.start_token) qs.set("start_token", params.start_token);
+  if (params.min_net !== void 0) qs.set("min_net", String(params.min_net));
+  if (params.min_hops !== void 0) qs.set("min_hops", String(params.min_hops));
+  if (params.max_hops !== void 0) qs.set("max_hops", String(params.max_hops));
+  if (params.limit !== void 0) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const raw = await get(`/routes${suffix}`);
+  return {
+    total: num$1(raw.total),
+    routes: arr(raw.routes).map(mapRouteScanRecord),
+    graph: mapGraphStats(raw.graph),
+    scan: mapScanRunStats(raw.scan)
+  };
+}
+async function routeDetail(routeId) {
+  const raw = await get(`/routes/${encodeURIComponent(routeId)}`);
+  return mapRouteScanRecord(raw);
+}
+async function scannerEngine() {
+  const raw = await get("/scanner/engine");
+  return {
+    params: mapEngineParams(raw.params),
+    scan: mapScanRunStats(raw.scan),
+    graph: mapGraphStats(raw.graph),
+    cache: mapCacheStats(raw.cache)
+  };
+}
+async function postJson(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    let message = `${path} → HTTP ${res.status}`;
+    try {
+      const payload = obj(await res.json());
+      const err = payload.error;
+      if (typeof err === "string") message = err;
+      else if (err && typeof err === "object" && typeof obj(err).message === "string") {
+        message = str(obj(err).message);
+      }
+    } catch {
+    }
+    throw new Error(message);
+  }
+  return await res.json();
+}
+async function runSimulation(routeId, level) {
+  const raw = await postJson("/simulations", { route_id: routeId, level });
+  const simulation = mapSimulation(raw.simulation);
+  if (!simulation) throw new Error("模拟响应缺少 simulation 字段");
+  return simulation;
+}
 
 let state = { scanDex: true, scanCex: true };
 const listeners$2 = /* @__PURE__ */ new Set();
@@ -22529,7 +22815,8 @@ const NAV = [
     items: [
       { id: "overview", label: "总览", icon: "overview", hash: "#/overview" },
       { id: "scannerDex", label: "DEX 原子扫描", icon: "scanner", hash: "#/scanner-dex" },
-      { id: "scannerCex", label: "CEX–DEX 扫描", icon: "hedge", hash: "#/scanner-cex" }
+      { id: "scannerCex", label: "CEX–DEX 扫描", icon: "hedge", hash: "#/scanner-cex" },
+      { id: "routes", label: "路由搜索中心", icon: "route", hash: "#/routes" }
     ]
   },
   {
@@ -22701,7 +22988,7 @@ const PRICE = {
   WBTC: 68640
 };
 const tp = (sym) => PRICE[sym] ?? 1;
-const qty = (sym, v) => `${fmt.num(v, sym === "WETH" || sym === "ETH" || sym === "WBTC" ? 4 : 2)} ${sym}`;
+const qty$1 = (sym, v) => `${fmt.num(v, sym === "WETH" || sym === "ETH" || sym === "WBTC" ? 4 : 2)} ${sym}`;
 function legsFor(o) {
   if (o.legs) return o.legs;
   let toks;
@@ -22730,9 +23017,9 @@ function legsFor(o) {
       to,
       pool,
       fee: isCex ? "8 bps" : /curve|balancer/i.test(pool) ? "0.01%" : /v2|sushi|aerodrome/i.test(pool) ? "0.30%" : "0.05%",
-      inQty: qty(from, vIn / tp(from)),
-      outQty: qty(to, vOut / tp(to)),
-      minOut: qty(to, vOut / tp(to) * 0.998),
+      inQty: qty$1(from, vIn / tp(from)),
+      outQty: qty$1(to, vOut / tp(to)),
+      minOut: qty$1(to, vOut / tp(to) * 0.998),
       impact: `${fmt.num((o.facts.impactBps || 6) * (i + 1) / n, 1)} bps`
     });
   }
@@ -23700,7 +23987,8 @@ function Overview() {
   const equity = d.equity;
   const ret = (equity - d.startEquity) / d.startEquity * 100;
   const last30 = d.series.slice(-30);
-  const exposure = 3.4;
+  const cexOpps = d.opps.filter((o) => o.strategy === "cex_dex" && o.status === "ACTIONABLE");
+  const exposure = Number(cexOpps.reduce((s, o) => s + o.notional, 0).toFixed(2));
   const rank = { ACTIONABLE: 0, WATCH: 1, REJECTED: 2, EXPIRED: 3, EXECUTED: 4 };
   const top = [...d.opps].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.net - a.net).slice(0, 5);
   const guards = [
@@ -23717,7 +24005,7 @@ function Overview() {
           " MONITOR · OVERVIEW"
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { children: "总览" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "page-sub", children: "本地 Paper 环境 · 权益基准 5,000 USDC · 全部数值为演示数据，不代表真实成交。" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "page-sub", children: `本地 Paper 环境 · 权益基准 ${fmt.num(d.startEquity, 0)} USDC · ${d.meta?.online ? "数据来自本地后端（Paper 账本），不涉及真实资金" : "后端未连接，当前为离线演示数据"}` })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "page-actions", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "seg", role: "group", "aria-label": "时间范围", children: [
@@ -23923,26 +24211,33 @@ function Overview() {
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "检出" }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar funnel-bar--dim", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "100%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "37" })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(d.scanner.detected, 0) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "通过模拟" }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar funnel-bar--dim", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "62%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "23" })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(Math.max(0, d.scanner.detected - d.scanner.rejected), 0) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "风控通过" }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "11%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "4" })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(d.scanner.actionable, 0) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "已拒绝" }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar funnel-bar--bad", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "11%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "4" })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(d.scanner.rejected, 0) })
               ] })
             ] }) }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel-body panel-body--tight", style: { borderTop: "1px solid var(--line-1)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row between", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "hint", children: "1,284 quotes/s · 326 池 · 3 链" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "hint", children: [
+                fmt.num(d.scanner.quotes, 0),
+                " quotes/s · ",
+                d.scanner.pools,
+                " 池 · ",
+                d.scanner.chains,
+                " 链"
+              ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "chip chip--idle", children: d.scanner.uptime })
             ] }) })
           ] }),
@@ -24057,6 +24352,10 @@ function ScanStrip({ running, subjects, events, quotes, quotesLabel = "quotes/s"
   ] });
 }
 
+const clip = (s, max = 26) => {
+  const tidy = s.replace(/(\d+\.\d{4})\d+/g, "$1").replace(/\s+/g, " ").trim();
+  return tidy.length > max ? tidy.slice(0, max) + "…" : tidy;
+};
 const sortVal = (o, k) => k === "risk" ? o.riskScore : k === "notional" ? o.notional : k === "age" ? o.ageMs : k === "stress" ? o.stressNet : o.net;
 function OppTable({
   rows,
@@ -24174,7 +24473,13 @@ function OppTable({
               /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: /* @__PURE__ */ jsxRuntimeExports.jsx(QualityChip, { quality: o.quality }) }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx(StatusChip, { status: o.status }),
-                o.reasons && o.reasons.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "reasons", children: o.reasons.slice(0, 2).map((r) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: r }, r)) })
+                o.reasons && o.reasons.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "reasons", title: o.reasons.join(" · "), children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: clip(o.reasons[0]) }),
+                  o.reasons.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("em", { children: [
+                    "+",
+                    o.reasons.length - 1
+                  ] })
+                ] })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: fmt.age(o.ageMs) })
             ]
@@ -24339,24 +24644,24 @@ function ScannerDex() {
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel-body", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "候选路线" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "本轮候选" }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar funnel-bar--dim", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "100%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(rs.candidates, 0) })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(rows.length, 0) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "剪枝后" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "通过模拟" }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar funnel-bar--dim", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "62%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(rs.pruned, 0) })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(rows.filter((o) => o.status !== "EXPIRED").length, 0) })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "精确模拟" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "34%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: rs.simulated })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "已拒绝" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar funnel-bar--bad", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "34%" } }) }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: rows.filter((o) => o.status === "REJECTED").length })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "funnel-row", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "风控通过" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: "8%" } }) }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: rs.passed })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "funnel-bar", children: /* @__PURE__ */ jsxRuntimeExports.jsx("i", { style: { width: `${Math.min(100, actionable / Math.max(1, rows.length) * 100)}%` } }) }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: actionable })
               ] })
             ] }) }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel-body panel-body--tight", style: { borderTop: "1px solid var(--line-1)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row between", children: [
@@ -24543,6 +24848,995 @@ function ScannerCex() {
         }
       )
     ] })
+  ] });
+}
+
+const MODEL_NOTE_FALLBACK = "M2 未接入 REVM：本机最高模拟等级为 M1 + M3（M2 不可用）；VERIFIED 仅保留给 M2。";
+const TYPE_LABEL = {
+  CROSS_POOL: "跨池",
+  TRIANGLE: "三角",
+  MULTI_HOP: "多跳"
+};
+const TYPE_DESC = {
+  CROSS_POOL: "2 跳 / 2 池",
+  TRIANGLE: "3 跳闭环",
+  MULTI_HOP: "4 跳及以上"
+};
+const LIFECYCLE_LABEL = {
+  DISCOVERED: "已发现",
+  QUOTED: "已报价",
+  PROFITABLE_ESTIMATE: "估算盈利",
+  SIMULATED: "已模拟",
+  VERIFIED: "已验证",
+  REJECTED: "已拒绝",
+  EXPIRED: "已过期",
+  FAILED: "模拟失败"
+};
+const SIM_LABEL = {
+  PASSED: "通过",
+  FAILED: "失败",
+  UNAVAILABLE: "不可用",
+  MODEL_MISMATCH: "模型不一致"
+};
+const SEVERITY_LABEL = {
+  HARD_STOP: "硬阻断",
+  SOFT_BLOCK: "软阻断",
+  WARNING: "警告",
+  PAPER_ONLY: "仅 Paper"
+};
+const AMM_LABEL = {
+  UNISWAP_V2: "Uniswap V2",
+  UNISWAP_V3: "Uniswap V3",
+  STABLESWAP: "StableSwap",
+  WEIGHTED: "Weighted",
+  UNKNOWN: "Unknown"
+};
+const cx = (...parts) => parts.filter((p) => Boolean(p)).join(" ");
+const humanizeProtocol = (id) => {
+  const s = id || "";
+  if (s.startsWith("uni-v3") || s.startsWith("uniswap-v3")) return "Uniswap V3";
+  if (s.startsWith("uni-v2") || s.startsWith("uniswap-v2")) return "Uniswap V2";
+  if (s.startsWith("sushi")) return "SushiSwap";
+  if (s.startsWith("curve")) return "Curve";
+  if (s.startsWith("bal")) return "Balancer";
+  if (s.startsWith("aero")) return "Aerodrome";
+  return s || "—";
+};
+const ammLabel = (amm) => AMM_LABEL[amm] ?? (amm ? amm.replace(/_/g, " ") : "—");
+const sourceLabel = (source) => source === "incremental" ? "增量复用" : source === "full" ? "全量重算" : source || "—";
+const sourceTag = (source) => source === "incremental" ? "INC" : source === "full" ? "FULL" : (source || "—").toUpperCase();
+const lifecycleVariant = (life) => {
+  if (life === "SIMULATED" || life === "VERIFIED") return "ok";
+  if (life === "REJECTED" || life === "FAILED") return "bad";
+  if (life === "PROFITABLE_ESTIMATE") return "warn";
+  return "idle";
+};
+const simVariant = (status) => {
+  if (status === "PASSED") return "ok";
+  if (status === "FAILED") return "bad";
+  if (status === "MODEL_MISMATCH") return "warn";
+  return "idle";
+};
+const severityVariant = (severity) => {
+  if (severity === "HARD_STOP") return "bad";
+  if (severity === "SOFT_BLOCK" || severity === "WARNING") return "warn";
+  return "idle";
+};
+const clockOf = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : fmt.clock(d);
+};
+const qty = (n) => fmt.num(n, Math.abs(n) >= 100 ? 2 : Math.abs(n) >= 1 ? 4 : 6);
+const proceedsOf = (r) => r.notional_usd + r.gross_usd;
+const valueOf = (r, key) => {
+  switch (key) {
+    case "net":
+      return r.net_usd;
+    case "netBps":
+      return r.net_bps;
+    case "notional":
+      return r.notional_usd;
+    case "gross":
+      return r.gross_usd;
+    case "cost":
+      return r.total_cost_usd;
+    case "gas":
+      return r.gas?.usd ?? 0;
+    case "hops":
+      return r.hops;
+  }
+};
+const sortArrow = (active, dir) => active ? dir === 1 ? " ↑" : " ↓" : "";
+function SimCard({
+  level,
+  title,
+  sim,
+  busy,
+  disabled,
+  onRun
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-sim", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-sim-head", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tag-mini", children: level }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: title })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "row", children: [
+        sim ? /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { variant: simVariant(sim.status), dot: true, children: SIM_LABEL[sim.status] ?? sim.status }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { variant: "idle", children: "未运行" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            className: "btn btn--sm",
+            onClick: onRun,
+            disabled,
+            title: "调用 POST /api/simulations 运行 " + level + " 模拟，结果写回后端并落库",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(Icon, { name: busy ? "refresh" : "sim" }),
+              busy ? "运行中" : "运行 " + level
+            ]
+          }
+        )
+      ] })
+    ] }),
+    sim ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("dl", { className: "kv route-sim-kv", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "报价输出" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { children: qty(sim.quoted_out) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "模拟输出" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { children: qty(sim.simulated_out) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "偏差" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { className: sim.status === "MODEL_MISMATCH" ? "warn" : "", children: fmt.signed(sim.diff_bps, 1) + " bps" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "模拟净利" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { className: sim.net_usd == null ? "muted" : signClass(sim.net_usd), children: sim.net_usd == null ? "—" : fmt.signed(sim.net_usd) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "Gas" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { children: sim.gas_estimate ? fmt.num(sim.gas_estimate.usd) : "—" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "状态区块" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { children: fmt.num(sim.state_block, 0) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dt", { children: "模拟时间" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("dd", { title: sim.created_at, children: clockOf(sim.created_at) })
+      ] }),
+      sim.notes.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "route-sim-notes", children: sim.notes.map((n, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("li", { children: n }, i)) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hint route-sim-id", title: sim.simulation_id, children: sim.simulation_id || "无 simulation_id" })
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "hint", children: [
+      "该路线尚未记录 ",
+      level,
+      " 结果。运行后由后端重新计算，界面只展示真实返回。"
+    ] })
+  ] });
+}
+function RouteDetail({
+  record,
+  modelNote,
+  onClose,
+  onSimulated
+}) {
+  const [busy, setBusy] = reactExports.useState(null);
+  const opt = record.optimization;
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const points = reactExports.useMemo(() => {
+    const merged = /* @__PURE__ */ new Map();
+    for (const p of record.optimization?.points ?? []) merged.set(p.amount_in, p);
+    const best2 = record.optimization?.best;
+    if (best2) merged.set(best2.amount_in, best2);
+    return [...merged.values()].sort((a, b) => a.amount_in_usd - b.amount_in_usd);
+  }, [record.optimization]);
+  const best = opt?.best ?? null;
+  const bestIdx = best ? points.findIndex((p) => p.amount_in === best.amount_in) : -1;
+  const xLabels = points.length > 1 ? [0, Math.floor((points.length - 1) / 2), points.length - 1].map((i) => ({
+    text: fmt.num(points[i].amount_in_usd, 0),
+    at: i / (points.length - 1) * 100
+  })) : [];
+  const simulate = async (level) => {
+    if (busy) return;
+    setBusy(level);
+    try {
+      const sim = await runSimulation(record.route_id, level);
+      onSimulated(level, sim);
+      toast(level + " 模拟已返回", {
+        sub: "状态 " + (SIM_LABEL[sim.status] ?? sim.status) + " · 偏差 " + fmt.num(sim.diff_bps, 1) + " bps · " + fmt.num(sim.state_block, 0) + " 区块",
+        variant: sim.status === "PASSED" ? void 0 : "warn"
+      });
+    } catch (e) {
+      toast("模拟请求失败", {
+        sub: e instanceof Error ? e.message : "后端不可达",
+        variant: "bad"
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const fingerprints = [
+    ["有向指纹", record.fingerprints.directed],
+    ["无方向指纹", record.fingerprints.undirected],
+    ["池序列", record.fingerprints.pool_sequence],
+    ["Token 序列", record.fingerprints.token_sequence],
+    ["起始资产", record.fingerprints.start_asset]
+  ];
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { className: "drawer route-drawer", "aria-label": "路线详情", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { className: "drawer-head", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "drawer-id", children: record.route_id }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "drawer-sub", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tag-mini", children: TYPE_LABEL[record.route_type] ?? record.route_type }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: record.hops + " 跳" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sep" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: record.start_token + " 闭环" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sep" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "模型 " + record.model_level }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sep" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: sourceLabel(record.source) })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "drawer-meta", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { variant: lifecycleVariant(record.lifecycle), dot: true, children: LIFECYCLE_LABEL[record.lifecycle] ?? record.lifecycle }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "btn btn--icon btn--ghost", onClick: onClose, "aria-label": "关闭详情", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Icon, { name: "x" }) })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "drawer-body", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "dw-ribbon", children: [
+        { label: "投入", v: record.notional_usd, bps: null, note: "名义投入 USDC" },
+        { label: "毛利", v: record.gross_usd, bps: null, note: "已扣 AMM 费与冲击" },
+        { label: "显式成本", v: -record.total_cost_usd, bps: null, note: "Gas / 优先费 / 储备" },
+        { label: "净利", v: record.net_usd, bps: record.net_bps, note: "回款 − 投入 − 成本" }
+      ].map((c) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-cell", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: c.label }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("b", { className: signClass(c.v), children: fmt.signed(c.v) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("small", { children: c.bps == null ? c.note : fmt.signed(c.bps, 1) + " bps · " + c.note })
+      ] }, c.label)) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-facts", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "回款（" + record.start_token + "）" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { title: "token 数量 " + record.amount_out, children: qty(record.amount_out) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Gas" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: record.gas ? fmt.num(record.gas.usd) : "—" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "路线容量" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(record.capacity_usd, 0) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "报价年龄" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { className: record.quote_age_ms > 1e3 ? "neg" : record.quote_age_ms > 250 ? "warn" : "", children: fmt.age(record.quote_age_ms) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "资金" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: record.flash_funded ? "闪电贷计价" : "自有库存" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "区块" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: fmt.num(record.block_number, 0) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "检测 / 过期" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { title: record.detected_at + " → " + record.expires_at, children: clockOf(record.detected_at) + " → " + clockOf(record.expires_at) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "机会 ID" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { title: record.opportunity_id ?? "", children: record.opportunity_id ?? "—" })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "dw-sec", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-sec-head", children: [
+          "路线与指纹 ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: record.chain_id + " · " + record.hops + " 跳" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-path", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-path-label", children: "Token" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-path-flow", children: record.token_path.map((t, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-token", children: t }),
+            i < record.token_path.length - 1 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-arrow", children: "→" })
+          ] }, t + "-" + i)) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-path", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-path-label", children: "Pool" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-path-flow", children: record.pool_path.map((p, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-pool", title: p, children: p }),
+            i < record.pool_path.length - 1 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-arrow", children: "→" })
+          ] }, p + "-" + i)) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "hint mt-8", children: [
+          "协议：" + (record.protocols.map(humanizeProtocol).join(" · ") || "—"),
+          "  ",
+          "· AMM：",
+          record.amms.map(ammLabel).join(" · ") || "—"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "route-fp mt-8", children: fingerprints.map(([k, v]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-fp-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: k }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { title: v, children: v || "—" })
+        ] }, k)) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "dw-sec", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-sec-head", children: [
+          "逐腿报价",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: record.legs.length + " 腿 · 区块 " + fmt.num(record.block_number, 0) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tbl-wrap", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "tbl tbl-compact route-legs", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "#" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "池" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "协议" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "AMM" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "输入" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "输出" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "费率" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "冲击" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "池 TVL" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "区块" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "状态年龄" })
+          ] }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("tbody", { children: [
+            record.legs.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("tr", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("td", { colSpan: 11, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "empty", children: "后端未返回逐腿记录。" }) }) }),
+            record.legs.map((leg) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "cell-id", children: String(leg.idx + 1).padStart(2, "0") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "route-leg-pool", title: leg.pool_id, children: leg.pool_id }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: humanizeProtocol(leg.protocol_id) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "muted", children: ammLabel(leg.amm) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { className: "is-num", children: [
+                qty(leg.amount_in),
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "faint", children: leg.token_in })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { className: "is-num", children: [
+                qty(leg.amount_out),
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "faint", children: leg.token_out })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: fmt.num(leg.fee_bps / 100, 2) + "%" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: fmt.num(leg.price_impact_bps, 1) + " bps" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: fmt.compact(leg.pool_tvl_usd) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: fmt.num(leg.block_number, 0) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "td",
+                {
+                  className: cx(
+                    "is-num",
+                    leg.state_age_ms > 3e3 ? "neg" : leg.state_age_ms > 250 ? "warn" : "muted"
+                  ),
+                  children: fmt.age(leg.state_age_ms)
+                }
+              )
+            ] }, String(leg.idx) + "-" + leg.pool_id))
+          ] })
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "dw-sec", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-sec-head", children: [
+          "投入优化曲线",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: opt ? fmt.num(opt.grid_points, 0) + " 网格 · " + fmt.num(opt.refine_iters, 0) + " 次细化" : "无记录" })
+        ] }),
+        opt ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-opt-meta", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "最优净利" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("b", { className: best ? signClass(best.net_usd) : "muted", children: best ? fmt.signed(best.net_usd) : "—" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("small", { children: best ? "投入 " + fmt.num(best.amount_in_usd, 0) + " USDC · " + best.source : "无盈利采样点" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "最小可盈利投入" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: opt.min_profitable_amount == null ? "—" : qty(opt.min_profitable_amount) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("small", { children: record.start_token + " · 采样点下限" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "最大可盈利投入" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: opt.max_profitable_amount == null ? "—" : qty(opt.max_profitable_amount) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("small", { children: record.start_token + " · 采样点上限" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "最大可执行投入" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: qty(opt.max_executable_amount) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("small", { children: record.start_token + " · 容量 " + fmt.num(record.capacity_usd, 0) + " USDC" })
+            ] })
+          ] }),
+          points.length >= 2 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-chart", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              LineChart,
+              {
+                values: points.map((p) => p.net_usd),
+                height: 180,
+                baseline: 0,
+                fillToBaseline: true,
+                yFormat: (v) => fmt.num(v, 0),
+                hoverFormat: (v) => fmt.signed(v, 2) + " USDC",
+                hoverLabel: (i) => {
+                  const p = points[i];
+                  return p ? "投入 " + fmt.num(p.amount_in_usd, 0) + " USDC · " + p.source : "";
+                },
+                xLabels
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hint route-chart-note", children: "横轴为按投入金额升序的采样点，悬停读取实际投入 USD；参考线为 0 净利。" })
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "empty", children: "采样点不足 2 个，无法绘制曲线；下表仍展示后端返回的全部点。" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tbl-wrap mt-12", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "tbl tbl-compact route-opt-tbl", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "投入" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "投入 USD" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "回款" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "毛利" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "成本" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "净利" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "bps" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "Gas" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "Gas 占比" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "冲击" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "来源" })
+            ] }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: points.map((p, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { className: bestIdx === i ? "is-best" : "", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: qty(p.amount_in) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: fmt.num(p.amount_in_usd, 0) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: qty(p.amount_out) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: cx("is-num", signClass(p.gross_usd)), children: fmt.signed(p.gross_usd) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num neg", children: fmt.signed(-p.cost_usd) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: cx("is-num", signClass(p.net_usd)), children: fmt.signed(p.net_usd) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: cx("is-num", signClass(p.net_bps)), children: fmt.signed(p.net_bps, 1) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: fmt.num(p.gas_usd) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: fmt.num(p.gas_share_pct, 1) + "%" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: fmt.num(p.price_impact_bps, 1) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tag-mini", children: p.source }) })
+            ] }, String(p.amount_in) + "-" + i)) })
+          ] }) }),
+          opt.notes.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "route-opt-notes", children: opt.notes.map((n, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("li", { children: n }, i)) }),
+          opt.truncated && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "route-opt-warn", children: "优化网格被预算或边界截断，结果不代表全局最优。" })
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "empty", children: "后端未返回投入优化记录。" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "dw-sec", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-sec-head", children: [
+          "M1 / M3 模拟 ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "M2 未接入 REVM · 最高 M1 + M3" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-sims", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            SimCard,
+            {
+              level: "M1",
+              title: "状态一致性",
+              sim: record.simulation,
+              busy: busy === "M1",
+              disabled: busy !== null,
+              onRun: () => void simulate("M1")
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            SimCard,
+            {
+              level: "M3",
+              title: "压力情景",
+              sim: record.stress,
+              busy: busy === "M3",
+              disabled: busy !== null,
+              onRun: () => void simulate("M3")
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hint mt-8", children: modelNote })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "dw-sec", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-sec-head", children: [
+          "拒绝原因 ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: record.rejections.length + " 项" })
+        ] }),
+        record.rejections.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hint", children: "本路线未触发拒绝规则。" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tbl-wrap", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "tbl tbl-compact route-reject-tbl", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "规则" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "级别" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "阈值" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "实际" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "说明" })
+          ] }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: record.rejections.map((v, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "route-reject-key", children: v.label }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "cell-sub", children: v.key })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { variant: severityVariant(v.severity), children: SEVERITY_LABEL[v.severity] ?? v.severity }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { className: "is-num", children: [
+              fmt.num(v.limit, 4),
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "faint", children: v.unit })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { className: "is-num", children: [
+              fmt.num(v.actual, 4),
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "faint", children: v.unit })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "route-msg", children: v.message })
+          ] }, v.key + "-" + i)) })
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "dw-sec", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dw-sec-head", children: [
+          "Gas 分项 ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: record.gas ? fmt.num(record.gas.units, 0) + " units" : "无记录" })
+        ] }),
+        record.gas ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tbl-wrap", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "tbl tbl-compact", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "分项" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "key" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "Gas units" })
+            ] }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: record.gas.components.map((c, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: c.label }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "cell-id", children: c.key }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: fmt.num(c.units, 0) })
+            ] }, c.key + "-" + i)) })
+          ] }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-gas-foot", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+              "合计 ",
+              fmt.num(record.gas.units, 0),
+              " units"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmt.num(record.gas.gas_price_gwei, 4) + " gwei" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "原生资产 $" + fmt.num(record.gas.native_price_usd, 2) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-gas-usd", children: fmt.num(record.gas.usd) + " USDC" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+              "区块 ",
+              fmt.num(record.gas.block_number, 0)
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: clockOf(record.gas.estimated_at) })
+          ] }),
+          record.gas.note && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hint mt-8", children: record.gas.note })
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hint", children: "该路线没有 Gas 估算记录。" })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "drawer-foot", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "hint", children: [
+        "路线记录来自 /api/routes 与 /api/routes/",
+        record.route_id,
+        "，不做本地估算。"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "btn", onClick: onClose, children: "关闭" })
+    ] })
+  ] });
+}
+function RouteSearch() {
+  const [snap, setSnap] = reactExports.useState(null);
+  const [engine, setEngine] = reactExports.useState(null);
+  const [error, setError] = reactExports.useState(null);
+  const [updatedAt, setUpdatedAt] = reactExports.useState(null);
+  const [loading, setLoading] = reactExports.useState(true);
+  const [selected, setSelected] = reactExports.useState(null);
+  const [typeFilter, setTypeFilter] = reactExports.useState("ALL");
+  const [netFilter, setNetFilter] = reactExports.useState("ALL");
+  const [hopFilter, setHopFilter] = reactExports.useState("ALL");
+  const [sort, setSort] = reactExports.useState("net");
+  const [dir, setDir] = reactExports.useState(-1);
+  const engineRef = reactExports.useRef(null);
+  const inFlight = reactExports.useRef(false);
+  const selectedIdRef = reactExports.useRef(null);
+  const pull = reactExports.useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      const res = await routes({ limit: 100 });
+      setSnap({ routes: res.routes, graph: res.graph, scan: res.scan, total: res.total });
+      setError(null);
+      setUpdatedAt(Date.now());
+      setLoading(false);
+      if (!engineRef.current) {
+        try {
+          const eng = await scannerEngine();
+          engineRef.current = eng;
+          setEngine(eng);
+        } catch {
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "后端不可达");
+      setLoading(false);
+    } finally {
+      inFlight.current = false;
+    }
+  }, []);
+  reactExports.useEffect(() => {
+    void pull();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void pull();
+    }, 2500);
+    const onVisibility = () => {
+      if (!document.hidden) void pull();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [pull]);
+  const graph = snap?.graph ?? engine?.graph ?? null;
+  const scan = snap?.scan ?? engine?.scan ?? null;
+  const all = snap?.routes ?? [];
+  const updatedLabel = updatedAt ? clockOf(new Date(updatedAt).toISOString()) : null;
+  const filtered = reactExports.useMemo(() => {
+    const list = all.filter((r) => typeFilter === "ALL" || r.route_type === typeFilter).filter((r) => {
+      if (netFilter === "ALL") return true;
+      if (netFilter === "GT0") return r.net_usd > 0;
+      if (netFilter === "GE5") return r.net_usd >= 5;
+      return r.net_usd >= 20;
+    }).filter((r) => {
+      if (hopFilter === "ALL") return true;
+      if (hopFilter === "2") return r.hops === 2;
+      if (hopFilter === "3") return r.hops === 3;
+      return r.hops >= 4;
+    });
+    return [...list].sort((a, b) => (valueOf(a, sort) - valueOf(b, sort)) * dir);
+  }, [all, typeFilter, netFilter, hopFilter, sort, dir]);
+  const filtersActive = typeFilter !== "ALL" || netFilter !== "ALL" || hopFilter !== "ALL";
+  const emptyText = error && !snap ? "后端不可达：" + error + "。尚未获得任何真实路线数据；页面每 2.5 秒重试，恢复前不展示估算值。" : all.length > 0 && filtered.length === 0 ? "当前筛选条件下没有路线（共 " + all.length + " 条）。清除类型 / 最小净利 / 跳数筛选可恢复。" : scan?.run_id ? "后端当前没有路线：本轮候选 " + scan.candidates + "，访问 " + scan.visits + "，剪枝 " + (scan.pruned_liquidity + scan.pruned_risk) + "，门禁拒绝 " + scan.rejected_by_gate + "。" : "后端尚未产生扫描轮次（run_id 为空）。路由引擎仅在扫描运行且池状态合格时写入结果；页面不会用演示数据填充。";
+  const onSort = (key) => {
+    if (sort === key) setDir((d) => d === 1 ? -1 : 1);
+    else {
+      setSort(key);
+      setDir(-1);
+    }
+  };
+  const openRoute = (record) => {
+    selectedIdRef.current = record.route_id;
+    setSelected(record);
+    routeDetail(record.route_id).then((fresh) => {
+      if (fresh.route_id === selectedIdRef.current) setSelected(fresh);
+    }).catch(() => {
+    });
+  };
+  const onSimulated = (level, sim) => {
+    setSelected(
+      (prev) => prev ? {
+        ...prev,
+        simulation: level === "M1" ? sim : prev.simulation,
+        stress: level === "M3" ? sim : prev.stress
+      } : prev
+    );
+  };
+  const clearFilters = () => {
+    setTypeFilter("ALL");
+    setNetFilter("ALL");
+    setHopFilter("ALL");
+  };
+  const modelNote = engine?.params.model_note || MODEL_NOTE_FALLBACK;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "page-head", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "page-head-main", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "page-eyebrow", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "idx", children: "14.3" }),
+          " MONITOR · DEX ROUTE SEARCH"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { children: "路由搜索中心" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "page-sub", children: "多池多跳扫描的记录视图：图构建 → 候选枚举 → 逐腿报价 → 投入优化 → M1 状态一致性 / M3 压力模拟。净利口径为「回款 − 投入 − 全部显式成本」，AMM 费用与冲击已含在成交价内。" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "page-actions", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: cx("route-live", error && "is-off"), children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: cx("scan-pulse", error && "scan-pulse--off") }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: error ? "后端不可达" : "LIVE" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: error ? "保留上次快照" : "2.5s 轮询" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            className: "btn btn--sm",
+            onClick: () => void pull(),
+            disabled: loading,
+            title: "立即请求 /api/routes",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(Icon, { name: "refresh" }),
+              "刷新"
+            ]
+          }
+        )
+      ] })
+    ] }),
+    error && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-offline", role: "status", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Icon, { name: "alert" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "后端不可达" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          error,
+          "。",
+          snap ? "界面保留 " + (updatedLabel ?? "上一次") + " 的真实快照，" : "尚未获得真实数据，",
+          "每 2.5 秒自动重试；不会生成或补造任何路线。"
+        ] })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-engine-note", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Icon, { name: "alert" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "模拟能力" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: modelNote })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tag-mini", children: scan?.model_level ?? "M1" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-grid route-kpis", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-label", children: [
+          "池 / 边 / Token",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "unit", children: "GRAPH" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-value", children: [
+          graph ? graph.pools : "—",
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("small", { children: [
+            "/ ",
+            graph ? graph.edges : "—"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("small", { children: [
+            "/ ",
+            graph ? graph.tokens : "—"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-foot", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "合格池 ",
+          graph ? graph.eligible_pools : "—",
+          " · 批准 Token",
+          " ",
+          graph ? graph.approved_tokens : "—",
+          " · 拒绝池 ",
+          graph ? graph.rejected_pools : "—"
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-label", children: [
+          "候选路线",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "unit", children: "CANDIDATES" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-value", children: scan ? fmt.num(scan.candidates, 0) : "—" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-foot", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "可盈利 ",
+          scan ? scan.profitable : "—",
+          " · 落库 ",
+          all.length,
+          " / 返回 ",
+          snap?.total ?? "—"
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-label", children: [
+          "访问量",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "unit", children: "VISITS" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-value", children: scan ? fmt.num(scan.visits, 0) : "—" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-foot", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "剪枝：流动性 ",
+          scan ? scan.pruned_liquidity : "—",
+          " · 风险",
+          " ",
+          scan ? scan.pruned_risk : "—"
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-label", children: [
+          "本轮重算 / 复用",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "unit", children: "REQUOTE / REUSE" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-value", children: [
+          scan ? scan.requoted : "—",
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("small", { children: [
+            "/ ",
+            scan ? scan.reused : "—"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-foot", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          scan ? scan.full_rescan ? "全量重扫" : "增量重扫" : "—",
+          " · ",
+          scan?.reason || "—"
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-label", children: [
+          "耗时",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "unit", children: "ELAPSED" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-value", children: [
+          scan ? fmt.num(scan.elapsed_ms, 1) : "—",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("small", { children: "ms" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-foot", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "预算 ",
+          engine ? fmt.num(engine.params.max_elapsed_ms, 0) : "—",
+          " ms · 起点",
+          " ",
+          scan?.base_tokens.length ? scan.base_tokens.join(" / ") : "—"
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "kpi-label", children: [
+          "是否截断",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "unit", children: "TRUNCATED" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: cx("kpi-value", scan?.truncated && "warn"), children: scan ? scan.truncated ? "是" : "否" : "—" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "kpi-foot", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "门禁拒绝 ",
+          scan ? scan.rejected_by_gate : "—",
+          " · 候选上限",
+          " ",
+          engine ? fmt.num(engine.params.max_candidates, 0) : "—"
+        ] }) })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { className: "panel mt-12", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { className: "panel-head", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("h2", { children: [
+          "路线扫描结果",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "count", children: [
+            filtered.length,
+            " / ",
+            all.length
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel-meta", children: updatedLabel ? "SYNC " + updatedLabel : loading ? "LOADING" : "NO DATA" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "toolbar", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "filters", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "seg", role: "group", "aria-label": "路线类型筛选", children: ["ALL", "CROSS_POOL", "TRIANGLE", "MULTI_HOP"].map((v) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: typeFilter === v ? "is-active" : "",
+              onClick: () => setTypeFilter(v),
+              children: v === "ALL" ? "全部类型" : TYPE_LABEL[v]
+            },
+            v
+          )) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "seg", role: "group", "aria-label": "最小净利筛选", children: ["ALL", "GT0", "GE5", "GE20"].map((v) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: netFilter === v ? "is-active" : "",
+              onClick: () => setNetFilter(v),
+              children: v === "ALL" ? "净利不限" : v === "GT0" ? "> 0" : "≥ " + (v === "GE5" ? 5 : 20) + " USDC"
+            },
+            v
+          )) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "seg", role: "group", "aria-label": "跳数筛选", children: ["ALL", "2", "3", "4"].map((v) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: hopFilter === v ? "is-active" : "",
+              onClick: () => setHopFilter(v),
+              children: v === "ALL" ? "跳数不限" : v === "4" ? "4+" : v + " 跳"
+            },
+            v
+          )) }),
+          filtersActive && /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { className: "btn btn--sm btn--ghost", onClick: clearFilters, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Icon, { name: "x" }),
+            "清除筛选"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "hint", children: "点击行查看逐腿、指纹、优化曲线与模拟" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel-body panel-body--flush", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tbl-wrap", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "tbl route-tbl", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "类型" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Token 闭环路径" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Pool 路径" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("hops"), children: [
+            "跳数",
+            sortArrow(sort === "hops", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("notional"), children: [
+            "投入 USD",
+            sortArrow(sort === "notional", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "is-num", children: "回款 USD" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("gross"), children: [
+            "毛利",
+            sortArrow(sort === "gross", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("cost"), children: [
+            "显式成本",
+            sortArrow(sort === "cost", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("net"), children: [
+            "净利",
+            sortArrow(sort === "net", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("netBps"), children: [
+            "bps",
+            sortArrow(sort === "netBps", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("th", { className: "is-num", style: { cursor: "pointer" }, onClick: () => onSort("gas"), children: [
+            "Gas",
+            sortArrow(sort === "gas", dir)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "生命周期" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "M1 / M3" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "来源" })
+        ] }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("tbody", { children: [
+          filtered.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("tr", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("td", { colSpan: 14, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "empty", children: emptyText }) }) }),
+          filtered.map((r) => {
+            const m1 = r.simulation;
+            const m3 = r.stress;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "tr",
+              {
+                className: cx("is-link", selected?.route_id === r.route_id && "is-selected"),
+                onClick: () => openRoute(r),
+                onKeyDown: (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openRoute(r);
+                  }
+                },
+                tabIndex: 0,
+                "aria-selected": selected?.route_id === r.route_id,
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { variant: "plain", children: TYPE_LABEL[r.route_type] ?? r.route_type }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "cell-sub", children: TYPE_DESC[r.route_type] ?? "" })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { className: "route-path-cell", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "route-path-inline", children: r.token_path.map((t, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-token", children: t }),
+                      i < r.token_path.length - 1 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "route-arrow", children: "→" })
+                    ] }, t + "-" + i)) }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "cell-sub", children: r.protocols.map(humanizeProtocol).join(" · ") })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "route-pool-cell", title: r.pool_path.join(" → "), children: r.pool_path.join(" → ") || "—" }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: r.hops }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: fmt.num(r.notional_usd, 0) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num", children: fmt.num(proceedsOf(r), 0) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: cx("is-num", signClass(r.gross_usd)), children: fmt.signed(r.gross_usd) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num neg", children: fmt.signed(-r.total_cost_usd) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: cx("is-num", signClass(r.net_usd)), children: fmt.signed(r.net_usd) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: cx("is-num", signClass(r.net_bps)), children: fmt.signed(r.net_bps, 1) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "is-num muted", children: r.gas ? fmt.num(r.gas.usd) : "—" }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(Chip, { variant: lifecycleVariant(r.lifecycle), dot: true, children: LIFECYCLE_LABEL[r.lifecycle] ?? r.lifecycle }),
+                    r.rejections.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "cell-sub", children: r.rejections.length + " 项拒绝" })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "route-simstats", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "span",
+                      {
+                        className: cx("route-simstat", m1 ? "is-" + m1.status.toLowerCase() : "is-none"),
+                        children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "M1" }),
+                          m1 ? SIM_LABEL[m1.status] ?? m1.status : "未运行"
+                        ]
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "span",
+                      {
+                        className: cx("route-simstat", m3 ? "is-" + m3.status.toLowerCase() : "is-none"),
+                        children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "M3" }),
+                          m3 ? SIM_LABEL[m3.status] ?? m3.status : "未运行"
+                        ]
+                      }
+                    )
+                  ] }) }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tag-mini", title: sourceLabel(r.source), children: sourceTag(r.source) }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "cell-sub", children: r.model_level })
+                  ] })
+                ]
+              },
+              r.route_id
+            );
+          })
+        ] })
+      ] }) }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "panel-note", children: "路线来自后端路由引擎的真实扫描结果；回款 USD = 投入 + 毛利（按起始资产计价），显式成本不含已内含在成交价里的 AMM 费。点击行的详情栏按需请求 /api/routes/<id>，失败时保留列表快照。" })
+    ] }),
+    selected && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      RouteDetail,
+      {
+        record: selected,
+        modelNote,
+        onClose: () => {
+          selectedIdRef.current = null;
+          setSelected(null);
+        },
+        onSimulated
+      }
+    )
   ] });
 }
 
@@ -27959,6 +29253,7 @@ const ROUTES = {
   overview: Overview,
   scannerDex: ScannerDex,
   scannerCex: ScannerCex,
+  routes: RouteSearch,
   executions: Executions,
   accounts: Accounts,
   performance: Performance,
@@ -27977,6 +29272,7 @@ const URL_ROUTE = {
   "scanner-dex": "scannerDex",
   scanner: "scannerDex",
   "scanner-cex": "scannerCex",
+  routes: "routes",
   executions: "executions",
   accounts: "accounts",
   performance: "performance",

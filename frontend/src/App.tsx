@@ -7,6 +7,7 @@ import { data, startPolling, useDataStatus } from "./data";
 import { Overview } from "./views/Overview";
 import { ScannerDex } from "./views/ScannerDex";
 import { ScannerCex } from "./views/ScannerCex";
+import { RouteSearch } from "./views/RouteSearch";
 import { Executions } from "./views/Executions";
 import { Accounts } from "./views/Accounts";
 import { Performance } from "./views/Performance";
@@ -25,6 +26,7 @@ const ROUTES: Record<string, () => JSX.Element> = {
   overview: Overview,
   scannerDex: ScannerDex,
   scannerCex: ScannerCex,
+  routes: RouteSearch,
   executions: Executions,
   accounts: Accounts,
   performance: Performance,
@@ -45,6 +47,7 @@ const URL_ROUTE: Record<string, string> = {
   "scanner-dex": "scannerDex",
   scanner: "scannerDex",
   "scanner-cex": "scannerCex",
+  routes: "routes",
   executions: "executions",
   accounts: "accounts",
   performance: "performance",

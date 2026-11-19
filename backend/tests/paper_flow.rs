@@ -10,7 +10,9 @@ use arb_backend::domain::market::{
 };
 use arb_backend::domain::money::dec;
 use arb_backend::domain::opportunity::{FundingSource, InventoryNeed, Opportunity};
-use arb_backend::domain::types::{ExecutionState, OppStatus, Side, StrategyType};
+use arb_backend::domain::types::{
+    ExecutionState, OppStatus, OpportunityLifecycle, Side, StrategyType,
+};
 use arb_backend::ledger::LedgerEngine;
 use arb_backend::paper::scenario::Scenario;
 use arb_backend::paper::{ExecMarket, PaperEngine, PaperParams};
@@ -136,6 +138,8 @@ fn opportunity(route: DexRoute) -> Opportunity {
         book_age_ms: 0,
         quote_age_ms: 0,
         status: OppStatus::Actionable,
+        lifecycle: OpportunityLifecycle::Simulated,
+        route_fingerprint: None,
         rejections: vec![],
         capacity_usd: dec("5000"),
         funding: FundingSource::OwnCapital,

@@ -273,5 +273,61 @@ CREATE TABLE IF NOT EXISTS scanner_state (
     updated_at  INTEGER NOT NULL
 );
 
+-- ---------- DEX 多池多跳引擎（PRD §13.3）----------
+CREATE TABLE IF NOT EXISTS dex_routes (
+    route_id     TEXT PRIMARY KEY,
+    fingerprint  TEXT NOT NULL,
+    chain_id     INTEGER NOT NULL,
+    start_token  TEXT NOT NULL,
+    hops         INTEGER NOT NULL,
+    route_type   TEXT NOT NULL,
+    lifecycle    TEXT NOT NULL,
+    amount_in    TEXT NOT NULL,
+    amount_out   TEXT NOT NULL,
+    notional     TEXT NOT NULL,
+    net_usd      TEXT NOT NULL,
+    block_number INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    json         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dex_routes_updated ON dex_routes(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dex_routes_net ON dex_routes(notional, net_usd);
+
+CREATE TABLE IF NOT EXISTS route_fingerprints (
+    fingerprint    TEXT PRIMARY KEY,
+    undirected     TEXT NOT NULL,
+    pool_sequence  TEXT NOT NULL,
+    token_sequence TEXT NOT NULL,
+    start_asset    TEXT NOT NULL,
+    route_id       TEXT NOT NULL,
+    json           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_route_fp_route ON route_fingerprints(route_id);
+
+CREATE TABLE IF NOT EXISTS simulations (
+    simulation_id TEXT PRIMARY KEY,
+    route_id      TEXT NOT NULL,
+    level         TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    json          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_simulations_route ON simulations(route_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS scan_runs (
+    run_id       TEXT PRIMARY KEY,
+    started_at   INTEGER NOT NULL,
+    elapsed_ms   INTEGER NOT NULL,
+    full_rescan  INTEGER NOT NULL,
+    candidates   INTEGER NOT NULL,
+    requoted     INTEGER NOT NULL,
+    reused       INTEGER NOT NULL,
+    visits       INTEGER NOT NULL,
+    truncated    INTEGER NOT NULL,
+    json         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
+
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, 0);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, 0);
 "#;

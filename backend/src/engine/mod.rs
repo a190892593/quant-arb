@@ -18,6 +18,9 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::domain::dex_scan::{
+    GraphStats, RouteScanRecord, ScanRunStats, SimulationOutcome,
+};
 use crate::domain::execution::ExecutionRecord;
 use crate::domain::market::{Instrument, Token};
 use crate::domain::opportunity::Opportunity;
@@ -28,6 +31,7 @@ use crate::feed::demo::DemoMarket;
 use crate::ledger::LedgerEngine;
 use crate::paper::{PaperEngine, PaperParams};
 use crate::risk::RiskEngine;
+use crate::strategy::dex_scan::{DexScanParams, MultiHopCache};
 use crate::strategy::StrategyEngine;
 
 /// 实时事件（WebSocket 推送）。
@@ -38,6 +42,9 @@ pub enum WsEvent {
     Execution { execution: Box<ExecutionRecord> },
     RiskEvent { event: Box<RiskEvent> },
     Scanner { status: Box<ScannerStatus> },
+    Route { route: Box<RouteScanRecord> },
+    Graph { stats: Box<GraphStats> },
+    Simulation { simulation: Box<SimulationOutcome> },
     Book { exchange: String, symbol: String, bid: Decimal, ask: Decimal, age_ms: i64 },
     Ledger { entry_id: String, account_id: String, asset: String, amount: Decimal },
     System { message: String },
@@ -73,6 +80,16 @@ pub struct AppState {
     pub stats: Arc<RwLock<RuntimeStats>>,
     pub paper: Arc<Mutex<PaperEngine>>,
     pub strategy: Arc<StrategyEngine>,
+    /// 多跳 DEX 扫描参数（由配置派生）。
+    pub dex_params: Arc<DexScanParams>,
+    /// 路线集合 + 池 → 路线反向索引（增量扫描）。
+    pub dex_cache: Arc<Mutex<MultiHopCache>>,
+    /// 最近一轮的路线记录（API / 前端）。
+    pub dex_routes: Arc<RwLock<Vec<RouteScanRecord>>>,
+    pub dex_graph: Arc<RwLock<GraphStats>>,
+    pub dex_scan_stats: Arc<RwLock<ScanRunStats>>,
+    /// 最近模拟结果（M1/M3，API 查询与审计）。
+    pub simulations: Arc<RwLock<Vec<SimulationOutcome>>>,
     /// 手工触发一次扫描的开关（API `/scanner/scan`）。
     pub scan_now: Arc<tokio::sync::Notify>,
 }
@@ -94,6 +111,7 @@ impl AppState {
             },
         )));
         let strategy = Arc::new(StrategyEngine::new());
+        let dex_params = Arc::new(DexScanParams::from_config(&config));
 
         let state = Arc::new(Self {
             config,
@@ -113,6 +131,12 @@ impl AppState {
             stats: Arc::new(RwLock::new(RuntimeStats::default())),
             paper,
             strategy,
+            dex_params,
+            dex_cache: Arc::new(Mutex::new(MultiHopCache::new())),
+            dex_routes: Arc::new(RwLock::new(Vec::new())),
+            dex_graph: Arc::new(RwLock::new(GraphStats::default())),
+            dex_scan_stats: Arc::new(RwLock::new(ScanRunStats::default())),
+            simulations: Arc::new(RwLock::new(Vec::new())),
             scan_now: Arc::new(tokio::sync::Notify::new()),
         });
         Ok(state)

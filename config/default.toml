@@ -57,6 +57,41 @@ gas_per_hop = 130000
 flash_loan_fee_bps = 5.0
 flash_provider = "aave-v3"
 
+# DEX 多池多跳扫描引擎（PRD §4–§7）。关闭 enabled 时回退旧版三角/跨池扫描。
+[dex_engine]
+enabled = true
+min_hops = 2
+max_hops = 5
+max_pools = 5
+# 候选路线 / 访问量 / 单次搜索时间预算（PRD §4.4）
+max_candidates = 100000
+max_visits = 200000
+max_elapsed_ms = 250
+# 投入金额范围与优化分辨率（PRD §5.4）
+min_input_usd = 50.0
+max_input_usd = 25000.0
+grid_points = 14
+refine_iters = 16
+# 池准入与容量（PRD §8）
+min_pool_tvl_usd = 100000.0
+max_pool_state_age_ms = 3000
+max_pool_share_pct = 10.0
+# M3 压力模拟（PRD §6.1）
+stress_bps = 25.0
+stress_gas_pct = 50.0
+stress_flash_pct = 50.0
+model_mismatch_max_bps = 50.0
+# 增量扫描（PRD §9.2）
+requote_age_ms = 800
+full_rescan_blocks = 30
+# Gas 估算分项（PRD §5.6）
+gas_executor_base = 45000
+gas_executor_per_hop = 12000
+gas_transfer_per_hop = 30000
+gas_flash_loan = 90000
+gas_approve = 50000
+base_symbols = ["USDC", "USDT"]
+
 # 链注册表（第一阶段按数据可得性逐批准入）
 [[chains]]
 chain_id = 42161

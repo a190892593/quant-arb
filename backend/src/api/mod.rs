@@ -47,6 +47,19 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/scanner/stop", post(handlers::scanner_stop))
         .route("/scanner/scan", post(handlers::scanner_scan))
         .route("/scanner/status", get(handlers::scanner_status))
+        .route("/scanner/config", get(handlers::scanner_config))
+        .route("/scanner/engine", get(handlers::scanner_engine))
+        .route("/scanner/restart", post(handlers::scanner_restart))
+        .route("/scanner/runs", get(handlers::scanner_runs))
+        // ---- DEX 多池多跳引擎（PRD §4–§7）----
+        .route("/routes", get(handlers::dex_routes))
+        .route("/routes/{id}", get(handlers::dex_route_detail))
+        .route("/dex/graph", get(handlers::dex_graph))
+        .route(
+            "/simulations",
+            get(handlers::simulations).post(handlers::create_simulation),
+        )
+        .route("/simulations/{id}", get(handlers::simulation_detail))
         .route("/opportunities", get(handlers::opportunities))
         .route("/opportunities/{id}", get(handlers::opportunity_detail))
         .route(
@@ -85,6 +98,39 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/audit/reports/{id}", get(handlers::audit_report))
         // ---- 合约 ----
         .route("/contract/status", get(handlers::contract_status));
+
+    // PRD §15 的 v1 契约：复用同一批处理器，避免两套逻辑漂移。
+    let v1: Router<Arc<AppState>> = Router::new()
+        .route("/system/status", get(handlers::system_status))
+        .route("/chains", get(handlers::chains))
+        .route("/dex/protocols", get(handlers::dex_protocols))
+        .route("/tokens", get(handlers::tokens))
+        .route("/pools", get(handlers::dex_pools))
+        .route("/scanner/config", get(handlers::scanner_config))
+        .route("/scanner/start", post(handlers::scanner_start))
+        .route("/scanner/stop", post(handlers::scanner_stop))
+        .route("/scanner/restart", post(handlers::scanner_restart))
+        .route("/routes", get(handlers::dex_routes))
+        .route("/routes/{id}", get(handlers::dex_route_detail))
+        .route("/opportunities", get(handlers::opportunities))
+        .route("/opportunities/{id}", get(handlers::opportunity_detail))
+        .route(
+            "/simulations",
+            get(handlers::simulations).post(handlers::create_simulation),
+        )
+        .route("/simulations/{id}", get(handlers::simulation_detail))
+        .route(
+            "/audits",
+            get(handlers::audit_jobs).post(handlers::audit_create),
+        )
+        .route("/audits/{id}", get(handlers::audit_job))
+        .route("/paper/accounts", get(handlers::paper_accounts))
+        .route("/paper/trades", get(handlers::paper_trades))
+        .route(
+            "/risk/rules",
+            get(handlers::risk_rules).put(handlers::risk_param_override),
+        );
+    let api = api.nest("/v1", v1);
 
     let mut app: Router<Arc<AppState>> = Router::new()
         .nest("/api", api)

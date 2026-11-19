@@ -114,7 +114,7 @@ pub fn build_scenario(
 
 /// 最坏情景损失估算：价格按 `adverse_bps` 反向、成本全额、部分成交后被迫补偿。
 pub fn worst_case_loss(
-    gross_usd: Decimal,
+    _gross_usd: Decimal,
     costs: &CostParts,
     adverse_bps: Decimal,
     notional: Decimal,

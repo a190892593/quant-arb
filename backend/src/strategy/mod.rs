@@ -7,6 +7,7 @@
 pub mod cex_dex;
 pub mod cost;
 pub mod dex_arb;
+pub mod dex_scan;
 pub mod scorer;
 
 use chrono::{DateTime, Utc};
@@ -14,10 +15,12 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 use crate::cex::BookEngine;
-use crate::domain::market::{Instrument, RiskDecision, Token};
+use crate::domain::market::{Instrument, RiskDecision, RiskViolation, Token};
 use crate::domain::opportunity::{FundingSource, Opportunity};
 use crate::domain::risk::{ControlState, RiskInput};
-use crate::domain::types::{DataQuality, OppStatus, StrategyType};
+use crate::domain::types::{
+    DataQuality, OppStatus, OpportunityLifecycle, RiskSeverity, StrategyType,
+};
 use crate::dex::PoolSet;
 use crate::risk::RiskEngine;
 
@@ -225,6 +228,31 @@ impl StrategyEngine {
         out
     }
 
+    /// 只扫描 CEX–DEX 策略（DEX 原子扫描由 [dex_scan] 新引擎负责）。
+    pub fn scan_cex_dex(
+        &self,
+        view: &MarketView<'_>,
+        cfg: &ScanConfig,
+        ctx: &ScanContext,
+        risk: &RiskEngine,
+    ) -> Vec<Opportunity> {
+        let mut out = Vec::new();
+        for notional in &cfg.notional_ladder {
+            let mut opps = cex_dex::scan(
+                view,
+                &self.cex_dex,
+                *notional,
+                &ctx.cex_available,
+                cfg.cex_first,
+            );
+            for o in opps.drain(..) {
+                out.push(self.apply_risk_and_score(view, ctx, risk, o));
+            }
+        }
+        out.sort_by(|a, b| b.conservative_net_profit.cmp(&a.conservative_net_profit));
+        out
+    }
+
     /// 风控判定 + 评分；返回值状态反映真实可执行性。
     pub fn apply_risk_and_score(
         &self,
@@ -306,7 +334,18 @@ impl StrategyEngine {
                 || !self.dex.flash_fee_bps.is_zero(),
         };
 
-        let decision: RiskDecision = risk.evaluate(&input, &ctx.controls, view.now);
+        // 路线级门禁（Token/Pool 准入、状态一致性、M1 模拟、容量）在引擎中已产生，
+        // 这里与风控引擎的判定合并；WARNING 不阻断，只记录。
+        let pre: Vec<RiskViolation> = std::mem::take(&mut opp.rejections);
+        let mut decision: RiskDecision = risk.evaluate(&input, &ctx.controls, view.now);
+        for v in pre {
+            if v.severity == RiskSeverity::Warning {
+                decision.warnings.push(v);
+            } else {
+                decision.allowed = false;
+                decision.violations.push(v);
+            }
+        }
 
         // 评分
         let score = scorer::score(&scorer::ScoreInput {
@@ -337,6 +376,12 @@ impl StrategyEngine {
             opp.status = OppStatus::Rejected;
         } else {
             opp.status = OppStatus::Actionable;
+        }
+        if opp.status == OppStatus::Rejected {
+            opp.lifecycle = OpportunityLifecycle::Rejected;
+        } else if opp.lifecycle == OpportunityLifecycle::Rejected {
+            // 门禁曾拒绝但风控放开：保持拒绝，避免状态倒退造成误执行。
+            opp.status = OppStatus::Rejected;
         }
         opp
     }
@@ -398,6 +443,8 @@ mod tests {
             book_age_ms: 0,
             quote_age_ms: 0,
             status: OppStatus::Actionable,
+            lifecycle: crate::domain::types::OpportunityLifecycle::Simulated,
+            route_fingerprint: None,
             rejections: vec![],
             capacity_usd: Decimal::from(5000),
             funding: FundingSource::OwnCapital,

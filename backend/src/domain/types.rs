@@ -342,6 +342,114 @@ str_enum! {
 }
 
 str_enum! {
+    /// Token 准入状态（PRD §3.3）。
+    ///
+    /// 只有 APPROVED 的 Token 可以进入高可信路线；RESTRICTED 允许观察但不得
+    /// 生成可执行机会；REJECTED 连报价都不应参与。
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Serialize, Deserialize)]
+    pub enum TokenStatus {
+        Unknown => "UNKNOWN",
+        Observing => "OBSERVING",
+        Approved => "APPROVED",
+        Restricted => "RESTRICTED",
+        Rejected => "REJECTED",
+    }
+}
+
+impl TokenStatus {
+    /// 是否达到「可作为高可信路线节点」的门槛。
+    pub fn is_approved(&self) -> bool {
+        matches!(self, TokenStatus::Approved)
+    }
+
+    /// 数值等级，越小越好（用于路线级取最差）。
+    pub fn rank(&self) -> u8 {
+        match self {
+            TokenStatus::Approved => 0,
+            TokenStatus::Observing => 1,
+            TokenStatus::Restricted => 2,
+            TokenStatus::Unknown => 3,
+            TokenStatus::Rejected => 4,
+        }
+    }
+}
+
+str_enum! {
+    /// 路线类型（PRD §2.2 A–D）。按跳数归类，只用于展示与统计，不改变报价。
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+    pub enum RouteType {
+        // 2 跳、2 个不同池
+        CrossPool => "CROSS_POOL",
+        // 3 跳
+        Triangle => "TRIANGLE",
+        // 4 跳及以上
+        MultiHop => "MULTI_HOP",
+    }
+}
+
+impl RouteType {
+    pub fn of_hops(hops: usize) -> Self {
+        match hops {
+            0..=2 => RouteType::CrossPool,
+            3 => RouteType::Triangle,
+            _ => RouteType::MultiHop,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            RouteType::CrossPool => "双池跨池",
+            RouteType::Triangle => "三角闭环",
+            RouteType::MultiHop => "多跳闭环",
+        }
+    }
+}
+
+str_enum! {
+    /// 机会生命周期（PRD §7.1）。
+    ///
+    /// 本机未接入 REVM，因此 VERIFIED 只能由 M2（本地 EVM）产生；
+    /// 仅通过 M1/M3 与风控的机会停留在 SIMULATED，不得冒称已验证。
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+    pub enum OpportunityLifecycle {
+        Discovered => "DISCOVERED",
+        Quoted => "QUOTED",
+        ProfitableEstimate => "PROFITABLE_ESTIMATE",
+        Simulated => "SIMULATED",
+        Verified => "VERIFIED",
+        Rejected => "REJECTED",
+        Expired => "EXPIRED",
+        Failed => "FAILED",
+    }
+}
+
+impl OpportunityLifecycle {
+    /// 是否处于终态（不再推进）。
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            OpportunityLifecycle::Verified
+                | OpportunityLifecycle::Rejected
+                | OpportunityLifecycle::Expired
+                | OpportunityLifecycle::Failed
+        )
+    }
+}
+
+str_enum! {
+    /// 模拟结果状态（PRD §6.3）。
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+    pub enum SimulationStatus {
+        Passed => "PASSED",
+        Failed => "FAILED",
+        // 当前环境不具备该等级模拟能力（例如未接入 REVM）
+        Unavailable => "UNAVAILABLE",
+        // 报价模型与模拟结果差异超过阈值
+        ModelMismatch => "MODEL_MISMATCH",
+    }
+}
+
+str_enum! {
     /// 池类型。只有经过适配验证的池类型可进入执行白名单。
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
     pub enum PoolKind {

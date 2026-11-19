@@ -14,7 +14,7 @@ use crate::domain::market::{DataQuality, DexRoute, ModelLevel, RouteLeg, Token};
 use crate::domain::money::{bps_of, bps_of_dec, q8, round_step_down};
 use crate::domain::opportunity::{FundingSource, InventoryNeed, Opportunity};
 use crate::domain::plan::fingerprint;
-use crate::domain::types::{OppStatus, StrategyType};
+use crate::domain::types::{OppStatus, OpportunityLifecycle, StrategyType};
 use crate::dex::{graph, pool};
 
 use super::cost::{build_scenario, usd_bps, worst_case_loss, CostParts};
@@ -267,7 +267,7 @@ pub fn to_opportunity(
         gas_units: cand.path.gas_units,
         gas_usd: cand.costs.gas,
         price_impact_bps: cand.path.price_impact_bps,
-        model_level: ModelLevel::M2,
+        model_level: ModelLevel::M1,
         block_number: cand.path.block_number,
         created_at: now,
     };
@@ -300,13 +300,15 @@ pub fn to_opportunity(
         scenario,
         risk_score: crate::domain::market::RiskScore::from_components(vec![]),
         data_quality: route_quality(view, cand),
-        model_level: ModelLevel::M2,
-        confidence: "M2 精确池状态 + 逐跳最低输出".into(),
+        model_level: ModelLevel::M1,
+        confidence: "M1 精确池状态逐跳报价（未做 EVM 模拟）".into(),
         quote_timestamp: now,
         quote_block_number: cand.path.block_number,
         book_age_ms: 0,
         quote_age_ms: 0,
         status: OppStatus::Watch,
+        lifecycle: OpportunityLifecycle::Quoted,
+        route_fingerprint: None,
         rejections: vec![],
         capacity_usd: cand.capacity_usd,
         funding,
@@ -386,6 +388,7 @@ mod tests {
             decimals: 2,
             standard: "ERC20".into(),
             code_hash: "0x1".into(),
+            status: crate::domain::types::TokenStatus::Approved,
             risk_tags: vec![],
             allowed_start: true,
             allowed_hop: true,

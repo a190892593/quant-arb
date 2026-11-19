@@ -149,6 +149,25 @@ pub struct ScannerStatus {
     pub pools: u64,
     pub scan_interval_ms: u64,
     pub last_scan_ms: u64,
+    // ---- 多跳引擎（PRD §9.2）----
+    #[serde(default)]
+    pub engine_routes: u64,
+    #[serde(default)]
+    pub engine_candidates: u64,
+    #[serde(default)]
+    pub engine_requoted: u64,
+    #[serde(default)]
+    pub engine_reused: u64,
+    #[serde(default)]
+    pub engine_edges: u64,
+    #[serde(default)]
+    pub engine_tokens: u64,
+    #[serde(default)]
+    pub engine_visits: u64,
+    #[serde(default)]
+    pub engine_truncated: bool,
+    #[serde(default)]
+    pub engine_full_rescan: bool,
 }
 
 impl Default for ScannerStatus {
@@ -169,6 +188,15 @@ impl Default for ScannerStatus {
             pools: 0,
             scan_interval_ms: 0,
             last_scan_ms: 0,
+            engine_routes: 0,
+            engine_candidates: 0,
+            engine_requoted: 0,
+            engine_reused: 0,
+            engine_edges: 0,
+            engine_tokens: 0,
+            engine_visits: 0,
+            engine_truncated: false,
+            engine_full_rescan: false,
         }
     }
 }

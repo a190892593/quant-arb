@@ -20,6 +20,7 @@ export const NAV: NavGroup[] = [
       { id: "overview", label: "总览", icon: "overview", hash: "#/overview" },
       { id: "scannerDex", label: "DEX 原子扫描", icon: "scanner", hash: "#/scanner-dex" },
       { id: "scannerCex", label: "CEX–DEX 扫描", icon: "hedge", hash: "#/scanner-cex" },
+      { id: "routes", label: "路由搜索中心", icon: "route", hash: "#/routes" },
     ],
   },
   {

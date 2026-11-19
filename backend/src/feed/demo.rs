@@ -14,7 +14,7 @@ use crate::domain::market::{
     BookLevel, Chain, DexProtocol, Instrument, OrderBook as DomainBook, PoolRef, PoolState, Token,
 };
 use crate::domain::money::{dec, q8};
-use crate::domain::types::{ChainStage, DataQuality, PoolKind};
+use crate::domain::types::{ChainStage, DataQuality, PoolKind, TokenStatus};
 use crate::dex::PoolSet;
 use crate::paper::scenario::Rng;
 
@@ -90,6 +90,7 @@ impl DemoMarket {
                     decimals,
                     standard: "ERC20".into(),
                     code_hash: format!("0x{:064x}", sym.len() * 977),
+                    status: TokenStatus::Approved,
                     risk_tags: vec![],
                     allowed_start: true,
                     allowed_hop: true,

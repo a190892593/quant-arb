@@ -114,10 +114,10 @@ export function ScannerDex() {
               </header>
               <div className="panel-body">
                 <div className="funnel">
-                  <div className="funnel-row"><span>候选路线</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "100%" }} /></div><b>{fmt.num(rs.candidates, 0)}</b></div>
-                  <div className="funnel-row"><span>剪枝后</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "62%" }} /></div><b>{fmt.num(rs.pruned, 0)}</b></div>
-                  <div className="funnel-row"><span>精确模拟</span><div className="funnel-bar"><i style={{ width: "34%" }} /></div><b>{rs.simulated}</b></div>
-                  <div className="funnel-row"><span>风控通过</span><div className="funnel-bar"><i style={{ width: "8%" }} /></div><b>{rs.passed}</b></div>
+                  <div className="funnel-row"><span>本轮候选</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "100%" }} /></div><b>{fmt.num(rows.length, 0)}</b></div>
+                  <div className="funnel-row"><span>通过模拟</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "62%" }} /></div><b>{fmt.num(rows.filter((o) => o.status !== "EXPIRED").length, 0)}</b></div>
+                  <div className="funnel-row"><span>已拒绝</span><div className="funnel-bar funnel-bar--bad"><i style={{ width: "34%" }} /></div><b>{rows.filter((o) => o.status === "REJECTED").length}</b></div>
+                  <div className="funnel-row"><span>风控通过</span><div className="funnel-bar"><i style={{ width: `${Math.min(100, (actionable / Math.max(1, rows.length)) * 100)}%` }} /></div><b>{actionable}</b></div>
                 </div>
               </div>
               <div className="panel-body panel-body--tight" style={{ borderTop: "1px solid var(--line-1)" }}>

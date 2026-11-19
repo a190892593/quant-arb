@@ -368,6 +368,8 @@ fn evaluate_direction(
         book_age_ms: (view.now - book.recv_ts).num_milliseconds(),
         quote_age_ms: 0,
         status: OppStatus::Watch,
+        lifecycle: crate::domain::types::OpportunityLifecycle::Quoted,
+        route_fingerprint: None,
         rejections: vec![],
         capacity_usd: capacity,
         funding: FundingSource::OwnCapital,

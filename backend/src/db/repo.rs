@@ -708,6 +708,183 @@ pub fn stats(db: &Db) -> Result<serde_json::Value> {
     Ok(serde_json::Value::Object(map))
 }
 
+// ---------------- DEX 多跳路线 / 模拟 / 扫描运行 ----------------
+
+use crate::domain::dex_scan::{RouteScanRecord, ScanRunStats, SimulationOutcome};
+
+/// 保存路线记录（upsert）与关联指纹、模拟结果。按扫描轮次重复调用是幂等的。
+pub fn save_route_records(db: &Db, routes: &[RouteScanRecord]) -> Result<()> {
+    if routes.is_empty() {
+        return Ok(());
+    }
+    db.with_tx(|tx| {
+        let now = crate::domain::now_ms();
+        for r in routes {
+            tx.execute(
+                "INSERT INTO dex_routes(route_id, fingerprint, chain_id, start_token, hops, route_type,
+                     lifecycle, amount_in, amount_out, notional, net_usd, block_number, updated_at, json)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                 ON CONFLICT(route_id) DO UPDATE SET lifecycle=excluded.lifecycle,
+                   amount_in=excluded.amount_in, amount_out=excluded.amount_out,
+                   notional=excluded.notional, net_usd=excluded.net_usd,
+                   block_number=excluded.block_number, updated_at=excluded.updated_at,
+                   json=excluded.json",
+                params![
+                    r.route_id,
+                    r.fingerprints.directed,
+                    r.chain_id as i64,
+                    r.start_token,
+                    r.hops as i64,
+                    r.route_type.as_str(),
+                    r.lifecycle.as_str(),
+                    r.amount_in.to_string(),
+                    r.amount_out.to_string(),
+                    r.notional_usd.to_string(),
+                    r.net_usd.to_string(),
+                    r.block_number as i64,
+                    now,
+                    to_json(r)?,
+                ],
+            )?;
+            tx.execute(
+                "INSERT INTO route_fingerprints(fingerprint, undirected, pool_sequence, token_sequence, start_asset, route_id, json)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7)
+                 ON CONFLICT(fingerprint) DO UPDATE SET route_id=excluded.route_id, json=excluded.json",
+                params![
+                    r.fingerprints.directed,
+                    r.fingerprints.undirected,
+                    r.fingerprints.pool_sequence,
+                    r.fingerprints.token_sequence,
+                    r.fingerprints.start_asset,
+                    r.route_id,
+                    to_json(&r.fingerprints)?,
+                ],
+            )?;
+            for sim in [r.simulation.as_ref(), r.stress.as_ref()].into_iter().flatten() {
+                tx.execute(
+                    "INSERT INTO simulations(simulation_id, route_id, level, status, created_at, json)
+                     VALUES(?1,?2,?3,?4,?5,?6)
+                     ON CONFLICT(simulation_id) DO UPDATE SET status=excluded.status, json=excluded.json",
+                    params![
+                        sim.simulation_id,
+                        r.route_id,
+                        sim.level.as_str(),
+                        sim.status.as_str(),
+                        dt_to_ms(sim.created_at),
+                        to_json(sim)?,
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// 保存单次模拟结果（API 主动触发时使用）。
+pub fn save_simulation(db: &Db, route_id: &str, sim: &SimulationOutcome) -> Result<()> {
+    db.execute(
+        "INSERT INTO simulations(simulation_id, route_id, level, status, created_at, json)
+         VALUES(?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(simulation_id) DO UPDATE SET status=excluded.status, json=excluded.json",
+        params![
+            sim.simulation_id,
+            route_id,
+            sim.level.as_str(),
+            sim.status.as_str(),
+            dt_to_ms(sim.created_at),
+            to_json(sim)?,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn load_simulations(db: &Db, limit: usize) -> Result<Vec<SimulationOutcome>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT json FROM simulations ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Some(v) = from_json::<SimulationOutcome>(&r?) {
+                out.push(v);
+            }
+        }
+        Ok(out)
+    })
+}
+
+pub fn save_scan_run(db: &Db, s: &ScanRunStats) -> Result<()> {
+    db.execute(
+        "INSERT INTO scan_runs(run_id, started_at, elapsed_ms, full_rescan, candidates, requoted,
+             reused, visits, truncated, json)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+         ON CONFLICT(run_id) DO UPDATE SET json=excluded.json",
+        params![
+            s.run_id,
+            s.started_at.map(dt_to_ms).unwrap_or(0),
+            s.elapsed_ms as i64,
+            s.full_rescan as i64,
+            s.candidates as i64,
+            s.requoted as i64,
+            s.reused as i64,
+            s.visits as i64,
+            s.truncated as i64,
+            to_json(s)?,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn load_scan_runs(db: &Db, limit: usize) -> Result<Vec<ScanRunStats>> {
+    db.with(|c| {
+        let mut stmt = c.prepare("SELECT json FROM scan_runs ORDER BY started_at DESC LIMIT ?1")?;
+        let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Some(v) = from_json::<ScanRunStats>(&r?) {
+                out.push(v);
+            }
+        }
+        Ok(out)
+    })
+}
+
+pub fn load_routes(db: &Db, limit: usize) -> Result<Vec<RouteScanRecord>> {
+    db.with(|c| {
+        let mut stmt = c.prepare("SELECT json FROM dex_routes ORDER BY updated_at DESC LIMIT ?1")?;
+        let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Some(v) = from_json::<RouteScanRecord>(&r?) {
+                out.push(v);
+            }
+        }
+        Ok(out)
+    })
+}
+
+pub fn prune_routes(db: &Db, keep: usize) -> Result<usize> {
+    let n = db.execute(
+        "DELETE FROM dex_routes WHERE route_id NOT IN (
+            SELECT route_id FROM dex_routes ORDER BY updated_at DESC LIMIT ?1
+        )",
+        params![keep as i64],
+    )?;
+    Ok(n)
+}
+
+pub fn prune_scan_runs(db: &Db, keep: usize) -> Result<usize> {
+    let n = db.execute(
+        "DELETE FROM scan_runs WHERE run_id NOT IN (
+            SELECT run_id FROM scan_runs ORDER BY started_at DESC LIMIT ?1
+        )",
+        params![keep as i64],
+    )?;
+    Ok(n)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,6 +924,8 @@ mod tests {
             book_age_ms: 0,
             quote_age_ms: 0,
             status: OppStatus::Actionable,
+            lifecycle: OpportunityLifecycle::Simulated,
+            route_fingerprint: None,
             rejections: vec![],
             capacity_usd: dec("5000"),
             funding: FundingSource::OwnCapital,

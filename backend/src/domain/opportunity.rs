@@ -7,7 +7,12 @@ use serde::{Deserialize, Serialize};
 use super::market::{
     CostBreakdown, DataQuality, DexRoute, ModelLevel, ProfitScenario, RiskScore, RiskViolation,
 };
-use super::types::{Direction, HedgeOrder, OppStatus, StrategyType};
+use super::types::{Direction, HedgeOrder, OppStatus, OpportunityLifecycle, StrategyType};
+
+/// 旧持久化记录缺少生命周期字段时的回退值（已有机会即已报价）。
+fn default_lifecycle() -> OpportunityLifecycle {
+    OpportunityLifecycle::Quoted
+}
 
 /// 资金方式。闪电贷只用于同链原子策略；CEX–DEX 使用预置库存。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,6 +107,13 @@ pub struct Opportunity {
     pub quote_age_ms: i64,
 
     pub status: OppStatus,
+    /// 生命周期（PRD §7.1）。与 status 并行：status 面向前端可执行性，
+    /// lifecycle 面向审计与统计。
+    #[serde(default = "default_lifecycle")]
+    pub lifecycle: OpportunityLifecycle,
+    /// 路线有向指纹（PRD §4.6），用于去重与追溯。
+    #[serde(default)]
+    pub route_fingerprint: Option<String>,
     /// 被风控拒绝的具体原因（PRD §5.4）。
     pub rejections: Vec<RiskViolation>,
 

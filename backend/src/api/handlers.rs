@@ -1084,6 +1084,360 @@ pub async fn contract_status(State(_state): State<Arc<AppState>>) -> ApiResult {
     })))
 }
 
+
+// ------------------------------------------------------------------
+// DEX 多池多跳引擎：路线、图、模拟与扫描配置（PRD §4–§7、§15）
+// ------------------------------------------------------------------
+
+/// 路线查询参数。
+#[derive(Deserialize)]
+pub struct RouteQuery {
+    pub route_type: Option<String>,
+    pub lifecycle: Option<String>,
+    pub start_token: Option<String>,
+    pub min_net: Option<Decimal>,
+    pub min_hops: Option<usize>,
+    pub max_hops: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+/// GET /api/routes —— 当前路线集合（含图与扫描统计）。
+pub async fn dex_routes(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RouteQuery>,
+) -> ApiResult {
+    let store = state.dex_routes.read().await;
+    let mut list: Vec<_> = store
+        .iter()
+        .filter(|r| {
+            q.route_type
+                .as_deref()
+                .map(|t| r.route_type.as_str() == t)
+                .unwrap_or(true)
+                && q.lifecycle
+                    .as_deref()
+                    .map(|l| r.lifecycle.as_str() == l)
+                    .unwrap_or(true)
+                && q.start_token
+                    .as_deref()
+                    .map(|t| r.start_token == t)
+                    .unwrap_or(true)
+                && q.min_net.map(|m| r.net_usd >= m).unwrap_or(true)
+                && q.min_hops.map(|h| r.hops >= h).unwrap_or(true)
+                && q.max_hops.map(|h| r.hops <= h).unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+    list.sort_by(|a, b| b.net_usd.cmp(&a.net_usd));
+    list.truncate(q.limit.unwrap_or(100));
+    let graph = state.dex_graph.read().await.clone();
+    let stats = state.dex_scan_stats.read().await.clone();
+    Ok(Json(json!({
+        "total": list.len(),
+        "routes": list,
+        "graph": graph,
+        "scan": stats,
+    })))
+}
+
+/// GET /api/routes/{id}
+pub async fn dex_route_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let found = {
+        let store = state.dex_routes.read().await;
+        store
+            .iter()
+            .find(|r| r.route_id == id)
+            .cloned()
+    };
+    if let Some(r) = found {
+        return Ok(Json(serde_json::to_value(r).unwrap_or(Value::Null)));
+    }
+    // 回退到已落库的路线（重启后仍可追溯）
+    let loaded = crate::db::repo::load_routes(&state.db, 500).unwrap_or_default();
+    match loaded.into_iter().find(|r| r.route_id == id) {
+        Some(r) => Ok(Json(serde_json::to_value(r).unwrap_or(Value::Null))),
+        None => Err(not_found("路线不存在")),
+    }
+}
+
+/// GET /api/dex/graph —— 图层统计与增量缓存状态。
+pub async fn dex_graph(State(state): State<Arc<AppState>>) -> ApiResult {
+    let graph = state.dex_graph.read().await.clone();
+    let stats = state.dex_scan_stats.read().await.clone();
+    let cache = state.dex_cache.lock().await;
+    Ok(Json(json!({
+        "graph": graph,
+        "scan": stats,
+        "cache": {
+            "routes": cache.route_count(),
+            "topology_signature": cache.topology_sig(),
+            "empty": cache.is_empty(),
+        },
+    })))
+}
+
+fn dex_engine_json(state: &Arc<AppState>) -> Value {
+    let p = &state.dex_params;
+    json!({
+        "gas": {
+            "executor_base": p.gas.executor_base,
+            "executor_per_hop": p.gas.executor_per_hop,
+            "transfer_per_hop": p.gas.transfer_per_hop,
+            "flash_loan": p.gas.flash_loan,
+            "approve": p.gas.approve,
+        },
+        "gas_price_gwei": p.gas_price_gwei,
+        "native_price_usd": p.native_price_usd,
+        "flash_fee_bps": p.flash_fee_bps,
+        "flash_provider": p.flash_provider,
+        "priority_fee_usd": p.priority_fee_usd,
+        "delay_reserve_bps": p.delay_reserve_bps,
+        "mev_reserve_bps": p.mev_reserve_bps,
+        "profit_discount_pct": p.profit_discount_pct,
+        "ttl_sec": p.ttl_sec,
+        "min_hops": p.min_hops,
+        "max_hops": p.max_hops,
+        "max_pools": p.max_pools,
+        "max_candidates": p.max_candidates,
+        "max_visits": p.max_visits,
+        "max_elapsed_ms": p.max_elapsed_ms,
+        "min_input_usd": p.min_input_usd,
+        "max_input_usd": p.max_input_usd,
+        "min_pool_tvl_usd": p.min_pool_tvl_usd,
+        "max_pool_state_age_ms": p.max_pool_state_age_ms,
+        "max_pool_share_pct": p.max_pool_share_pct,
+        "grid_points": p.grid_points,
+        "refine_iters": p.refine_iters,
+        "stress": {
+            "adverse_bps": p.stress.adverse_bps,
+            "gas_increase_pct": p.stress.gas_increase_pct,
+            "flash_fee_increase_pct": p.stress.flash_fee_increase_pct,
+        },
+        "model_mismatch_max_bps": p.model_mismatch_max_bps,
+        "requote_age_ms": p.requote_age_ms,
+        "full_rescan_blocks": p.full_rescan_blocks,
+        "base_symbols": p.base_symbols,
+        "notional_ladder": p.notional_ladder,
+        "model_note": "本机未接入 REVM：M2 不可用，最高模拟等级为 M1 + M3；VERIFIED 仅保留给 M2。",
+    })
+}
+
+/// GET /api/scanner/engine —— 引擎参数、图层与最近一轮统计。
+pub async fn scanner_engine(State(state): State<Arc<AppState>>) -> ApiResult {
+    let stats = state.dex_scan_stats.read().await.clone();
+    let graph = state.dex_graph.read().await.clone();
+    let cache = state.dex_cache.lock().await;
+    Ok(Json(json!({
+        "params": dex_engine_json(&state),
+        "scan": stats,
+        "graph": graph,
+        "cache": {
+            "routes": cache.route_count(),
+            "topology_signature": cache.topology_sig(),
+        },
+    })))
+}
+
+/// GET /api/scanner/config —— 扫描控制台读取的配置（PRD §15）。
+pub async fn scanner_config(State(state): State<Arc<AppState>>) -> ApiResult {
+    let s = state.scanner.read().await.clone();
+    Ok(Json(json!({
+        "scanner": s,
+        "paper": {
+            "scan_interval_ms": state.config.paper.scan_interval_ms,
+            "opportunity_ttl_sec": state.config.paper.opportunity_ttl_sec,
+            "notional_ladder": state.config.paper.notional_ladder,
+            "auto_execute": state.config.paper.auto_execute,
+            "execute_probability": state.config.paper.execute_probability,
+            "start_equity": state.config.paper.start_equity,
+            "dex_share": state.config.paper.dex_share,
+        },
+        "dex_engine": dex_engine_json(&state),
+        "feed": {
+            "mode": state.config.feed.mode,
+            "seed": state.config.feed.seed,
+            "tick_ms": state.config.feed.tick_ms,
+        },
+    })))
+}
+
+/// POST /api/scanner/restart
+pub async fn scanner_restart(State(state): State<Arc<AppState>>) -> ApiResult {
+    scanner::stop(&state).await;
+    scanner::start(&state).await;
+    let s = state.scanner.read().await.clone();
+    state.broadcast(crate::engine::WsEvent::Scanner {
+        status: Box::new(s.clone()),
+    });
+    Ok(Json(json!({ "ok": true, "scanner": s })))
+}
+
+/// GET /api/scanner/runs —— 最近若干轮扫描统计（审计用）。
+pub async fn scanner_runs(State(state): State<Arc<AppState>>) -> ApiResult {
+    let mut runs = crate::db::repo::load_scan_runs(&state.db, 50).unwrap_or_default();
+    if runs.is_empty() {
+        let current = state.dex_scan_stats.read().await.clone();
+        if !current.run_id.is_empty() {
+            runs.push(current);
+        }
+    }
+    Ok(Json(json!({ "runs": runs })))
+}
+
+/// POST /api/simulations —— 对已记录路线重新执行 M1 / M3（M2 明确不可用）。
+#[derive(Deserialize)]
+pub struct SimulationRequest {
+    pub route_id: String,
+    /// M1（状态一致性）、M3（压力，默认）或 M2（返回 UNAVAILABLE）。
+    pub level: Option<String>,
+}
+
+pub async fn create_simulation(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SimulationRequest>,
+) -> ApiResult {
+    let record = {
+        let store = state.dex_routes.read().await;
+        store.iter().find(|r| r.route_id == req.route_id).cloned()
+    }
+    .or_else(|| {
+        crate::db::repo::load_routes(&state.db, 500)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|r| r.route_id == req.route_id)
+    });
+    let Some(record) = record else {
+        return Err(not_found("路线不存在，无法模拟"));
+    };
+
+    let edges: Vec<crate::dex::graph::HopEdge> = record
+        .legs
+        .iter()
+        .map(|l| crate::dex::graph::HopEdge {
+            pool_id: l.pool_id.clone(),
+            token_in: l.token_in.clone(),
+            token_out: l.token_out.clone(),
+            kind: l.amm,
+        })
+        .collect();
+
+    let level = req.level.unwrap_or_else(|| "M3".into()).to_uppercase();
+    let market = state.market.read().await;
+    let params = &state.dex_params;
+    let price = market
+        .prices
+        .get(&record.start_token)
+        .copied()
+        .unwrap_or(Decimal::ONE);
+    let quote_out = record.amount_out;
+    let amount = record.amount_in;
+    let notional = record.notional_usd;
+    let flash = record
+        .gas
+        .as_ref()
+        .map(|g| g.components.iter().any(|c| c.key == "flash_loan"))
+        .unwrap_or(false);
+
+    let simulation = match level.as_str() {
+        "M1" => crate::dex::sim::simulate_m1(
+            &market.pools,
+            &record.start_token,
+            amount,
+            &edges,
+            quote_out,
+        ),
+        "M2" => crate::dex::sim::simulate_m2_unavailable(record.block_number),
+        _ => {
+            let gas = record.gas.clone();
+            let gas_for_net = gas.clone();
+            let fee_bps = params.flash_fee_bps;
+            let priority = params.priority_fee_usd;
+            let delay = params.delay_reserve_bps;
+            let mev = params.mev_reserve_bps;
+            let flash_multiplier =
+                Decimal::ONE + params.stress.flash_fee_increase_pct / Decimal::from(100);
+            crate::dex::sim::simulate_m3(
+                &market.pools,
+                &record.start_token,
+                amount,
+                &edges,
+                quote_out,
+                &params.stress,
+                gas.as_ref(),
+                move |out, gas_est| {
+                    let gas_usd = gas_est
+                        .map(|g| g.usd)
+                        .or_else(|| gas_for_net.as_ref().map(|g| g.usd))
+                        .unwrap_or(Decimal::ZERO);
+                    let mut cost = gas_usd + priority;
+                    if flash {
+                        cost += crate::domain::money::bps_of_dec(notional, fee_bps)
+                            * flash_multiplier;
+                    }
+                    cost += crate::domain::money::bps_of_dec(notional, delay);
+                    cost += crate::domain::money::bps_of_dec(notional, mev);
+                    (out - amount) * price - cost
+                },
+            )
+        }
+    };
+    drop(market);
+
+    if let Err(e) = crate::db::repo::save_simulation(&state.db, &record.route_id, &simulation) {
+        tracing::warn!("模拟落库失败: {e}");
+    }
+    {
+        let mut sims = state.simulations.write().await;
+        sims.insert(0, simulation.clone());
+        if sims.len() > 1_000 {
+            sims.truncate(1_000);
+        }
+    }
+    state.broadcast(crate::engine::WsEvent::Simulation {
+        simulation: Box::new(simulation.clone()),
+    });
+    Ok(Json(json!({
+        "route_id": record.route_id,
+        "simulation": simulation,
+    })))
+}
+
+/// GET /api/simulations/{id}
+pub async fn simulation_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let found = {
+        let sims = state.simulations.read().await;
+        sims.iter().find(|s| s.simulation_id == id).cloned()
+    };
+    if let Some(s) = found {
+        return Ok(Json(serde_json::to_value(s).unwrap_or(Value::Null)));
+    }
+    let loaded = crate::db::repo::load_simulations(&state.db, 500).unwrap_or_default();
+    match loaded.into_iter().find(|s| s.simulation_id == id) {
+        Some(s) => Ok(Json(serde_json::to_value(s).unwrap_or(Value::Null))),
+        None => Err(not_found("模拟记录不存在")),
+    }
+}
+
+/// GET /api/simulations —— 最近模拟结果列表。
+pub async fn simulations(State(state): State<Arc<AppState>>) -> ApiResult {
+    let mut sims: Vec<crate::domain::dex_scan::SimulationOutcome> =
+        state.simulations.read().await.clone();
+    if sims.is_empty() {
+        // 重启后内存为空：从数据库回读，保证模拟结果可追溯。
+        sims = crate::db::repo::load_simulations(&state.db, 100).unwrap_or_default();
+    }
+    Ok(Json(json!({
+        "total": sims.len(),
+        "simulations": sims.into_iter().take(100).collect::<Vec<_>>(),
+    })))
+}
+
 /// 兼容类型：让前端可读的中文标签映射集中在一处。
 pub fn strategy_label(s: StrategyType) -> &'static str {
     s.label()

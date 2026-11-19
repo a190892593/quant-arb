@@ -23,7 +23,8 @@ export function Overview() {
   const equity = d.equity;
   const ret = ((equity - d.startEquity) / d.startEquity) * 100;
   const last30 = d.series.slice(-30);
-  const exposure = 3.4;
+  const cexOpps = d.opps.filter((o) => o.strategy === 'cex_dex' && o.status === 'ACTIONABLE');
+  const exposure = Number(cexOpps.reduce((s, o) => s + o.notional, 0).toFixed(2));
 
   const rank: Record<string, number> = { ACTIONABLE: 0, WATCH: 1, REJECTED: 2, EXPIRED: 3, EXECUTED: 4 };
   const top = [...d.opps]
@@ -45,7 +46,7 @@ export function Overview() {
             <span className="idx">01</span> MONITOR · OVERVIEW
           </div>
           <h1>总览</h1>
-          <p className="page-sub">本地 Paper 环境 · 权益基准 5,000 USDC · 全部数值为演示数据，不代表真实成交。</p>
+          <p className="page-sub">{`本地 Paper 环境 · 权益基准 ${fmt.num(d.startEquity, 0)} USDC · ${d.meta?.online ? "数据来自本地后端（Paper 账本），不涉及真实资金" : "后端未连接，当前为离线演示数据"}`}</p>
         </div>
         <div className="page-actions">
           <div className="seg" role="group" aria-label="时间范围">
@@ -220,15 +221,15 @@ export function Overview() {
               </header>
               <div className="panel-body">
                 <div className="funnel">
-                  <div className="funnel-row"><span>检出</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "100%" }} /></div><b>37</b></div>
-                  <div className="funnel-row"><span>通过模拟</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "62%" }} /></div><b>23</b></div>
-                  <div className="funnel-row"><span>风控通过</span><div className="funnel-bar"><i style={{ width: "11%" }} /></div><b>4</b></div>
-                  <div className="funnel-row"><span>已拒绝</span><div className="funnel-bar funnel-bar--bad"><i style={{ width: "11%" }} /></div><b>4</b></div>
+                  <div className="funnel-row"><span>检出</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "100%" }} /></div><b>{fmt.num(d.scanner.detected, 0)}</b></div>
+                  <div className="funnel-row"><span>通过模拟</span><div className="funnel-bar funnel-bar--dim"><i style={{ width: "62%" }} /></div><b>{fmt.num(Math.max(0, d.scanner.detected - d.scanner.rejected), 0)}</b></div>
+                  <div className="funnel-row"><span>风控通过</span><div className="funnel-bar"><i style={{ width: "11%" }} /></div><b>{fmt.num(d.scanner.actionable, 0)}</b></div>
+                  <div className="funnel-row"><span>已拒绝</span><div className="funnel-bar funnel-bar--bad"><i style={{ width: "11%" }} /></div><b>{fmt.num(d.scanner.rejected, 0)}</b></div>
                 </div>
               </div>
               <div className="panel-body panel-body--tight" style={{ borderTop: "1px solid var(--line-1)" }}>
                 <div className="row between">
-                  <span className="hint">1,284 quotes/s · 326 池 · 3 链</span>
+                  <span className="hint">{fmt.num(d.scanner.quotes, 0)} quotes/s · {d.scanner.pools} 池 · {d.scanner.chains} 链</span>
                   <span className="chip chip--idle">{d.scanner.uptime}</span>
                 </div>
               </div>
