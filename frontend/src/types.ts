@@ -930,3 +930,17 @@ export type SourcePresetResponse = {
   warnings: string[];
   config: SourceConfig;
 };
+
+/** 标价明细（/api/system/prices） */
+export type PriceRow = {
+  symbol: string;
+  usd: number;
+  divergence_bps: number;
+};
+
+export type PricesResponse = {
+  source: string;
+  max_divergence_bps: number;
+  notes: string | null;
+  tokens: PriceRow[];
+};

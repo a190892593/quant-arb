@@ -92,6 +92,10 @@ pub struct LiveFeed {
     tick_cache: HashMap<String, (Vec<crate::domain::market::TickLiquidity>, chrono::DateTime<Utc>)>,
     min_tvl_usd: Decimal,
     bal_refresh_ms: i64,
+    /// 上一轮链上推导的标价（下一轮作为 TVL 计算的主源）。
+    mark_onchain: HashMap<String, Decimal>,
+    /// 最近一次三源合并结果（写入快照与 health）。
+    marks: crate::price::Marks,
     /// 搜索配置（白/黑名单 + 可编辑参数）。
     search: std::sync::Arc<tokio::sync::Mutex<crate::search_config::SearchConfig>>,
     workspace: std::path::PathBuf,
@@ -376,6 +380,8 @@ impl LiveFeed {
             bal_refresh_ms: 60_000,
             search,
             workspace,
+            mark_onchain: HashMap::new(),
+            marks: crate::price::Marks::default(),
             pending,
         })
     }
@@ -607,6 +613,11 @@ impl LiveFeed {
             let Ok(a1) = abi::parse_address(&p.address1) else {
                 continue;
             };
+            // 只并入白名单 Token 的池：发现源里常混入未登记或乱码符号，
+            // 它们既进不了图，又会污染标价表。
+            if !self.token_known(&p.token0) || !self.token_known(&p.token1) {
+                continue;
+            }
             let kind = match p.kind.to_ascii_uppercase().as_str() {
                 "UNISWAP_V3" => PoolKind::UniswapV3,
                 _ => PoolKind::UniswapV2,
@@ -632,6 +643,49 @@ impl LiveFeed {
         }
     }
 
+    /// Token 是否在白名单内（用于过滤发现源的脏数据）。
+    fn token_known(&self, symbol: &str) -> bool {
+        self.tokens.iter().any(|t| t.symbol == symbol)
+    }
+    /// 批量读取 Chainlink 聚合价（最新一轮）。失败只记录，不影响主流程。
+    async fn chainlink_marks(&mut self) -> HashMap<String, Decimal> {
+        let feeds = crate::price::chainlink_feeds();
+        let mut calls = Vec::with_capacity(feeds.len());
+        for (_, addr) in &feeds {
+            let Ok(a) = abi::parse_address(addr) else {
+                continue;
+            };
+            calls.push(Call {
+                to: a,
+                data: abi::encode_call("latestRoundData()", &[]),
+            });
+        }
+        if calls.is_empty() {
+            return HashMap::new();
+        }
+        let Ok(results) = self.rpc.batch_eth_call(&calls, None).await else {
+            self.last_errors.push("Chainlink 标价读取失败".into());
+            return HashMap::new();
+        };
+        let mut out = HashMap::new();
+        for (i, (sym, _)) in feeds.iter().enumerate() {
+            let Some(r) = results.get(i).filter(|r| r.ok()) else {
+                continue;
+            };
+            if let Some((usd, updated)) = crate::price::parse_chainlink(&r.data) {
+                if usd <= Decimal::ZERO {
+                    continue;
+                }
+                let age = Utc::now().timestamp() - updated;
+                if age > 86_400 {
+                    self.last_errors.push(format!("Chainlink {sym} 价过期 {age}s"));
+                    continue;
+                }
+                out.insert((*sym).to_string(), usd);
+            }
+        }
+        out
+    }
     /// 一次完整同步：读链上状态 + CEX 盘口，生成不可变快照。
     pub async fn sync(&mut self) -> Result<MarketData, String> {
         let started = Instant::now();
@@ -650,11 +704,12 @@ impl LiveFeed {
         self.gas_price_gwei = dec_u128(gas.unwrap_or(0)) / Decimal::from(1_000_000_000u64);
         let (timestamp, _base_fee) = header.unwrap_or((0, 0));
 
-        // ---- CEX 公共盘口（真实深度，用于 CEX–DEX）----
+        // ---- 标价：链上稳定币池为主源，Chainlink 校验，CEX（Binance）兜底 ----
+        // Binance 盘口仍然拉取（深度/成交价用于交叉校验与展示），但不再决定标价。
         let mut books = BookEngine::new();
-        let mut prices: HashMap<String, Decimal> = HashMap::new();
-        prices.insert("USDC".into(), Decimal::ONE);
-        prices.insert("USDT".into(), Decimal::ONE);
+        let mut cex_prices: HashMap<String, Decimal> = HashMap::new();
+        cex_prices.insert("USDC".into(), Decimal::ONE);
+        cex_prices.insert("USDT".into(), Decimal::ONE);
         // 4 个 CEX 符号并发拉取深度，避免串行叠加延迟。
         let mut set = tokio::task::JoinSet::new();
         for symbol in self.cex_symbols.clone() {
@@ -673,13 +728,13 @@ impl LiveFeed {
                 Ok(book) => {
                     if let Some(mid) = book.mid() {
                         let (base, quote) = split_symbol(&symbol);
-                        let quote_price = prices.get(&quote).copied().unwrap_or(Decimal::ONE);
-                        prices.insert(base.clone(), mid * quote_price);
+                        let quote_price = cex_prices.get(&quote).copied().unwrap_or(Decimal::ONE);
+                        cex_prices.insert(base.clone(), mid * quote_price);
                         if base == "ETH" {
-                            prices.insert("WETH".into(), mid * quote_price);
+                            cex_prices.insert("WETH".into(), mid * quote_price);
                         }
                         if base == "BTC" {
-                            prices.insert("WBTC".into(), mid * quote_price);
+                            cex_prices.insert("WBTC".into(), mid * quote_price);
                         }
                     }
                     books.upsert_snapshot(book);
@@ -690,21 +745,44 @@ impl LiveFeed {
             }
         }
 
-        // 稳定币与包装资产的价格别名：DAI 按 1，wstETH 跟随 ETH/WETH。
+        // ---- Chainlink 校验价（批量 eth_call，失败不影响主流程）----
+        let chainlink = self.chainlink_marks().await;
+        // ---- 三源合并：链上（上一轮推导）为主，Chainlink 校验，CEX 兜底 ----
+        let phase = crate::price::merge(&self.mark_onchain, &chainlink, &cex_prices, Decimal::from(50));
+        // 只保留白名单 Token 与已登记别名：发现源可能带进未登记/乱码符号。
+        let allowed: std::collections::HashSet<String> = self
+            .tokens
+            .iter()
+            .map(|t| t.symbol.clone())
+            .chain(["ETH".to_string(), "BTC".to_string(), "cbBTC".to_string(), "CBBTC".to_string(), "USDC".to_string(), "USDT".to_string(), "DAI".to_string()])
+            .collect();
+        let mut prices: HashMap<String, Decimal> = phase
+            .prices
+            .iter()
+            .filter(|(k, _)| allowed.contains(*k) || k.eq_ignore_ascii_case("wsteth"))
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        // 稳定币与包装资产别名
         prices.entry("DAI".into()).or_insert(Decimal::ONE);
         if let Some(w) = prices.get("WETH").copied() {
             prices.entry("wstETH".into()).or_insert(w);
+            prices.entry("ETH".into()).or_insert(w);
         }
-        // 自动发现推导出的 Token 价格（聚合器池内价格）。
+        if let Some(b) = prices.get("WBTC").copied() {
+            prices.entry("BTC".into()).or_insert(b);
+        }
+        // 自动发现推导出的 Token 价格：只补白名单内、且三源都缺失的 Token，
+        // 避免未登记/乱码符号污染标价表。
         for p in crate::dex::discovery::load_pools(&self.workspace) {
-            if p.price0_usd > 0.0 {
-                if let Some(d) = Decimal::from_f64(p.price0_usd) {
-                    prices.entry(p.token0.to_ascii_uppercase()).or_insert(d);
+            for (sym, px) in [(&p.token0, p.price0_usd), (&p.token1, p.price1_usd)] {
+                if px <= 0.0 || prices.contains_key(&sym.to_ascii_uppercase()) {
+                    continue;
                 }
-            }
-            if p.price1_usd > 0.0 {
-                if let Some(d) = Decimal::from_f64(p.price1_usd) {
-                    prices.entry(p.token1.to_ascii_uppercase()).or_insert(d);
+                if !crate::price::stable_marks().contains_key(sym.as_str()) && !self.token_known(sym) {
+                    continue;
+                }
+                if let Some(d) = Decimal::from_f64(px) {
+                    prices.entry(sym.to_ascii_uppercase()).or_insert(d);
                 }
             }
         }
@@ -1217,7 +1295,29 @@ impl LiveFeed {
             }
         }
 
+        // ---- 用本轮池状态重算链上标价（下一轮 TVL 用），并生成最终标价与分歧 ----
+        {
+            let onchain = crate::price::derive_pool_marks(&pool_set);
+            let mut final_marks = crate::price::merge(&onchain, &chainlink, &cex_prices, Decimal::from(50));
+            final_marks
+                .prices
+                .retain(|k, _| allowed.contains(k.as_str()) || k.eq_ignore_ascii_case("wsteth"));
+            final_marks
+                .divergence_bps
+                .retain(|k, _| allowed.contains(k.as_str()) || k.eq_ignore_ascii_case("wsteth"));
+            final_marks
+                .source
+                .retain(|k, _| allowed.contains(k.as_str()) || k.eq_ignore_ascii_case("wsteth"));
+            for (sym, px) in &final_marks.prices {
+                if *px > Decimal::ZERO {
+                    prices.insert(sym.clone(), *px);
+                }
+            }
+            self.mark_onchain = onchain;
+            self.marks = final_marks;
+        }
         self.tick_count += 1;
+        let allowed_prices = allowed.clone();
         self.last_latency_ms = started.elapsed().as_millis() as u64;
         let block_age_ms = if timestamp > 0 {
             (Utc::now().timestamp_millis() - (timestamp as i64) * 1000).max(0)
@@ -1242,6 +1342,9 @@ impl LiveFeed {
             pools_total: self.pools.len(),
             pools_refreshed: refreshed,
             ticks_pools: 0,
+            price_source: if self.marks.source.is_empty() { "cex".into() } else { format!("onchain+chainlink+cex（{} 个 Token）", self.marks.prices.len()) },
+            price_divergence_bps: self.marks.max_divergence_bps.try_into().unwrap_or(0.0),
+            price_notes: if self.marks.summary.is_empty() { None } else { Some(self.marks.summary.clone()) },
         };
 
         Ok(MarketData {
@@ -1253,6 +1356,7 @@ impl LiveFeed {
             instruments,
             books,
             prices,
+            price_divergence: self.marks.divergence_bps.clone(),
             mode: "live".into(),
             source: "arbitrum-rpc + binance".into(),
             updated_at: now,

@@ -28,6 +28,7 @@ import type {
   FlashLoan,
   GasEstimate,
   GraphStats,
+  PricesResponse,
   InputOptimization,
   InputPoint,
   Instrument,
@@ -1404,6 +1405,10 @@ async function sendJson<T>(method: "PUT" | "POST", path: string, body: unknown):
     throw new Error(message);
   }
   return (await res.json()) as T;
+}
+
+export async function fetchPrices(): Promise<PricesResponse> {
+  return get<PricesResponse>("/system/prices");
 }
 
 export async function fetchSearchConfig(): Promise<SearchConfigResponse> {

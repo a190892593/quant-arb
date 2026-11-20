@@ -191,6 +191,15 @@ impl SearchParams {
     }
 }
 
+/// Token 符号合法性：只允许 ASCII 字母数字与少量连接符，长度 1–12。
+/// 用于挡住自动发现带进来的乱码符号（例如被错误编码替换的稳定币名）。
+pub fn valid_symbol(sym: &str) -> bool {
+    let s = sym.trim();
+    !s.is_empty()
+        && s.len() <= 12
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
 /// 完整搜索配置。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -220,6 +229,14 @@ impl SearchConfig {
             if let Ok(mut parsed) = serde_json::from_str::<SearchConfig>(&text) {
                 if parsed.tokens.is_empty() {
                     parsed.tokens = seed_tokens(cfg);
+                }
+                let before = parsed.tokens.len();
+                parsed.tokens.retain(|t| valid_symbol(&t.symbol));
+                if parsed.tokens.len() != before {
+                    tracing::warn!(
+                        "搜索配置里有 {} 个非法 Token 符号，已忽略",
+                        before - parsed.tokens.len()
+                    );
                 }
                 parsed.params.upgrade_legacy(cfg);
                 return parsed;

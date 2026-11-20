@@ -324,6 +324,34 @@ pub async fn system_health(State(state): State<Arc<AppState>>) -> ApiResult {
     Ok(Json(scanner::health_json(&state).await))
 }
 
+/// 标价明细：每个 Token 的 USD 价、来源与三源分歧（bps）。
+pub async fn system_prices(State(state): State<Arc<AppState>>) -> ApiResult {
+    let market = state.market.read().await;
+    let mut rows: Vec<Value> = market
+        .prices
+        .iter()
+        .map(|(sym, px)| {
+            json!({
+                "symbol": sym,
+                "usd": px,
+                "divergence_bps": market.price_divergence.get(sym).copied().unwrap_or_default(),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b["divergence_bps"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .partial_cmp(&a["divergence_bps"].as_f64().unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(Json(json!({
+        "source": market.health.price_source,
+        "max_divergence_bps": market.health.price_divergence_bps,
+        "notes": market.health.price_notes,
+        "tokens": rows,
+    })))
+}
 pub async fn system_config(State(state): State<Arc<AppState>>) -> ApiResult {
     let mut cfg = serde_json::to_value(&state.config).unwrap_or(Value::Null);
     // 不暴露任何凭据字段（第一阶段本就没有）

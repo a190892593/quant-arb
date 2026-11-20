@@ -1356,7 +1356,7 @@ export function RouteSearch() {
                       <td className="is-num">{fmt.num(proceedsOf(r), 0)}</td>
                       <td className={cx("is-num", signClass(r.gross_usd))}>{fmt.signed(r.gross_usd)}</td>
                       <td className="is-num neg">{fmt.signed(-r.total_cost_usd)}</td>
-                      <td className={cx("is-num", signClass(r.net_usd))}>{fmt.signed(r.net_usd)}</td>
+                      <td className={cx("is-num", signClass(r.net_usd))}>{fmt.signed(r.net_usd)}<span className="cell-sub" title="起始资产口径的净利（不经 USD 标价换算）">{fmt.signed(r.amount_out - r.amount_in, 6)} {r.start_token}</span></td>
                       <td className={cx("is-num", signClass(r.net_bps))}>{fmt.signed(r.net_bps, 1)}</td>
                       <td className="is-num muted">{r.gas ? fmt.num(r.gas.usd) : "—"}</td>
                       <td className={cx("is-num", r.stress && signClass(r.stress.net_usd ?? 0))}>

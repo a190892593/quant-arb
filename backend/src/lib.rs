@@ -26,6 +26,7 @@ pub mod evm;
 pub mod feed;
 pub mod ledger;
 pub mod paper;
+pub mod price;
 pub mod risk;
 pub mod search_config;
 pub mod source_config;

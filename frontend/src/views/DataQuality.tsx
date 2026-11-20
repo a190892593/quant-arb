@@ -3,6 +3,7 @@ import type { Instrument, Opportunity } from "../types";
 import { fmt } from "../lib/format";
 import { Icon } from "../lib/icons";
 import { Chip } from "../ui/Chip";
+import { PriceSourcePanel } from "../components/PriceSourcePanel";
 import { toast } from "../ui/Toast";
 
 /**
@@ -135,6 +136,8 @@ export function DataQuality() {
             </div>
           </div>
         </div>
+
+        <PriceSourcePanel />
 
         <section className="panel">
           <header className="panel-head">

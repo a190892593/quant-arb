@@ -26,6 +26,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/system/status", get(handlers::system_status))
         .route("/system/health", get(handlers::system_health))
         .route("/system/config", get(handlers::system_config))
+.route("/system/prices", get(handlers::system_prices))
         .route("/system/controls", get(handlers::system_controls))
         .route("/system/database", get(handlers::system_database))
         .route("/system/restart-check", get(handlers::restart_check))

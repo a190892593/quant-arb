@@ -33,6 +33,12 @@ pub struct FeedHealth {
     pub pools_total: usize,
     pub pools_refreshed: usize,
     pub ticks_pools: usize,
+    /// 标价主源：onchain / chainlink / cex 的组合说明。
+    pub price_source: String,
+    /// 各 Token 标价与三源中位数的最大偏差（bps）。
+    pub price_divergence_bps: f64,
+    /// 分歧超阈值的 Token 摘要（为空表示一致）。
+    pub price_notes: Option<String>,
 }
 
 /// 一次同步得到的市场快照。
@@ -46,6 +52,8 @@ pub struct MarketData {
     pub instruments: HashMap<String, Instrument>,
     pub books: BookEngine,
     pub prices: HashMap<String, Decimal>,
+    /// 每个 Token 的三源标价分歧（bps），用于机会降级。
+    pub price_divergence: HashMap<String, Decimal>,
     pub mode: String,
     pub source: String,
     pub updated_at: DateTime<Utc>,
@@ -65,6 +73,7 @@ impl MarketData {
             instruments: HashMap::new(),
             books: BookEngine::new(),
             prices: HashMap::new(),
+            price_divergence: HashMap::new(),
             mode: "live".into(),
             source: String::new(),
             updated_at: Utc::now(),
@@ -83,6 +92,9 @@ impl MarketData {
                 pools_total: 0,
                 pools_refreshed: 0,
                 ticks_pools: 0,
+                price_source: "none".into(),
+                price_divergence_bps: 0.0,
+                price_notes: None,
             },
         }
     }

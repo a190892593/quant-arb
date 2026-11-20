@@ -173,6 +173,48 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                 crate::domain::dex_scan::GraphStats::default(),
             )
         };
+        // ---- 标价分歧门禁：三源价格分歧过大的 Token，相关机会降级为观察 ----
+        {
+            let div = market.price_divergence.clone();
+            let threshold = Decimal::from(50);
+            for o in all.iter_mut() {
+                let Some(route) = o.dex_route.as_ref() else {
+                    continue;
+                };
+                let mut worst = Decimal::ZERO;
+                let mut worst_token = String::new();
+                for t in route
+                    .legs
+                    .iter()
+                    .map(|l| &l.token_in)
+                    .chain(route.legs.iter().map(|l| &l.token_out))
+                    .chain(std::iter::once(&route.start_token))
+                {
+                    if let Some(d) = div.get(t) {
+                        if *d > worst {
+                            worst = *d;
+                            worst_token = t.clone();
+                        }
+                    }
+                }
+                if worst > threshold {
+                    o.rejections.push(RiskViolation {
+                        key: "price_divergence".into(),
+                        label: "标价分歧".into(),
+                        severity: RiskSeverity::SoftBlock,
+                        limit: threshold,
+                        actual: worst,
+                        unit: "bps".into(),
+                        message: format!(
+                            "{} 的三源标价偏差 {:.0} bps，超过 {:.0} bps 阈值，机会降级为观察",
+                            worst_token, worst, threshold
+                        ),
+                    });
+                    o.status = OppStatus::Watch;
+                }
+            }
+        }
+
         drop(risk);
 
         // 去重：同策略 + 同规模 + 同路线只保留净利最高者
