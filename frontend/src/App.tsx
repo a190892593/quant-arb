@@ -6,7 +6,6 @@ import { Toaster } from "./ui/Toast";
 import { data, startPolling, useDataStatus } from "./data";
 import { Overview } from "./views/Overview";
 import { RouteSearch } from "./views/RouteSearch";
-import { ScannerCex } from "./views/ScannerCex";
 import { Executions } from "./views/Executions";
 import { Accounts } from "./views/Accounts";
 import { Performance } from "./views/Performance";
@@ -25,7 +24,6 @@ import { DataSources } from "./views/DataSources";
 const ROUTES: Record<string, () => JSX.Element> = {
   overview: Overview,
   scannerDex: RouteSearch,
-  scannerCex: ScannerCex,
   executions: Executions,
   accounts: Accounts,
   performance: Performance,
@@ -47,7 +45,7 @@ const URL_ROUTE: Record<string, string> = {
   "scanner-dex": "scannerDex",
   routes: "scannerDex",
   scanner: "scannerDex",
-  "scanner-cex": "scannerCex",
+  "scanner-cex": "scannerDex", // CEX 扫描已移除，旧链接重定向到 DEX 搜索引擎
   executions: "executions",
   accounts: "accounts",
   performance: "performance",
@@ -100,7 +98,7 @@ export function App() {
   const oppId = name === "opportunity" ? param : undefined;
   const opp = oppId ? data.opps.find((o) => o.id === oppId) : undefined;
   const routeKey = URL_ROUTE[name] ?? name;
-  const base = opp ? (opp.strategy === "cex_dex" ? "scannerCex" : "scannerDex") : routeKey;
+  const base = opp ? "scannerDex" : routeKey;
   const active = oppId ? base : name === "strategy" ? `strategy:${param}` : routeKey;
   const Page = ROUTES[routeKey] ?? (opp ? ROUTES[base] : undefined);
   const showPending = !oppId && !ROUTES[routeKey];
@@ -131,7 +129,7 @@ export function App() {
         <OppDrawer
           id={opp.id}
           onClose={() => {
-            history.replaceState(null, "", opp.strategy === "cex_dex" ? "#/scanner-cex" : "#/scanner-dex");
+            history.replaceState(null, "", "#/scanner-dex");
             window.dispatchEvent(new HashChangeEvent("hashchange"));
           }}
         />

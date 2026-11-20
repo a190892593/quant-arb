@@ -100,8 +100,7 @@ export function Rail({ active }: { active: string }) {
         { label: "敞口", cur: 13.6 },
       ];
 
-  const actionableDex = data.opps.filter((o) => o.strategy !== "cex_dex" && o.status === "ACTIONABLE").length;
-  const actionableCex = data.opps.filter((o) => o.strategy === "cex_dex" && o.status === "ACTIONABLE").length;
+  const actionableDex = data.opps.filter((o) => o.status === "ACTIONABLE").length;
 
   return (
     <aside className="rail">
@@ -111,7 +110,7 @@ export function Rail({ active }: { active: string }) {
             <div className="nav-label">{group.label}</div>
             {group.items.map((item) => {
               const badge =
-                item.id === "scannerDex" ? actionableDex : item.id === "scannerCex" ? actionableCex : undefined;
+                item.id === "scannerDex" ? actionableDex : undefined;
               return (
                 <a
                   key={item.id}

@@ -401,7 +401,7 @@ export function Strategy() {
                 <div className="panel-meta">
                   <a
                     className="btn btn--sm btn--ghost"
-                    href={id === "cex_dex" ? "#/scanner-cex" : "#/scanner-dex"}
+                    href="#/scanner-dex"
                   >
                     查看扫描 <Icon name="chevron" />
                   </a>

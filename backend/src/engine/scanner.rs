@@ -154,9 +154,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                 .into_iter()
                 .map(|o| state.strategy.apply_risk_and_score(&view, &ctx, &risk, o))
                 .collect();
-            // ---- CEX–DEX 双腿对冲（非原子，保持原有引擎）----
-            let mut cex_opps = state.strategy.scan_cex_dex(&view, &cfg, &ctx, &risk);
-            all.append(&mut cex_opps);
+            // 已移除 CEX–DEX 扫描：本系统只做 DEX 原子套利搜索。
             (all, out.routes, out.stats, out.graph)
         } else {
             // 回退路径：dex_engine.enabled = false 时使用旧版三角/跨池扫描。
@@ -167,7 +165,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                 model_level: crate::domain::types::ModelLevel::M1,
                 ..Default::default()
             };
-            // scan() 已包含 DEX 与 CEX–DEX，无需再调用 scan_cex_dex 以免重复。
+            // 旧引擎只产出 DEX 原子机会。
             (
                 all,
                 Vec::new(),

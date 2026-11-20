@@ -24,7 +24,6 @@ export const NAV: NavGroup[] = [
     label: "搜索 SEARCH",
     items: [
       { id: "scannerDex", label: "DEX–DEX 搜索引擎", icon: "scanner", hash: "#/scanner-dex" },
-      { id: "scannerCex", label: "CEX–DEX 搜索引擎", icon: "hedge", hash: "#/scanner-cex" },
       { id: "sources", label: "搜索数据源配置", icon: "system", hash: "#/sources" },
     ],
   },

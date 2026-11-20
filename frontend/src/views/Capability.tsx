@@ -17,7 +17,7 @@ const CAPS: Cap[] = [
   { n: "多 DEX / 多协议池监控", s: "ready", where: "#/pools", doc: "PRD §5.2", note: "7 协议 · 326 池 · 池 / Token / Adapter 三层白名单" },
   { n: "原子三角套利", s: "ready", where: "#/scanner-dex", doc: "PRD §2.2", note: "同链三跳闭环，逐跳最低输出约束，整笔回滚" },
   { n: "原子跨池套利", s: "ready", where: "#/scanner-dex", doc: "PRD §2.3", note: "跨 DEX / 跨池价差，V3 / V2 / StableSwap / Weighted 分类适配" },
-  { n: "CEX–DEX 链外对冲", s: "ready", where: "#/scanner-cex", doc: "PRD §2.4", note: "非原子双腿，部分成交 / 回滚 / 状态未知全部分支" },
+  { n: "CEX–DEX 链外对冲", s: "off", where: "#/strategy/cex_dex", doc: "PRD §2.4", note: "已从搜索链路移除：非原子双腿，风险与复杂度高，当前专注 DEX 原子套利" },
   { n: "多路径搜索与最优金额", s: "partial", where: "#/scanner-dex", doc: "TDD §4.2", note: "已表达搜索规模（候选→剪枝→模拟）与最优名义容量曲线；逐条候选路径尚未单独视图" },
   { n: "完整盈亏推演", s: "ready", where: "机会抽屉", doc: "PRD §5.5", note: "M0–M3 四模型 + 成本桥 + 容量曲线 + 三类失效模型与最坏情景" },
   { n: "模拟实盘交易", s: "ready", where: "#/executions", doc: "PRD §5.6", note: "8 条执行轨迹，覆盖对冲成功 / 部分成交 / 回滚 / 状态未知 / UNWIND / 人工处置" },

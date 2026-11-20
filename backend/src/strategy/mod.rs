@@ -4,7 +4,6 @@
 //! 供 Research / Paper / 未来 Live 共用。此模块只做「发现与定价」，
 //! 执行与结算在 [`crate::paper`]。
 
-pub mod cex_dex;
 pub mod cost;
 pub mod dex_arb;
 pub mod dex_scan;
@@ -83,42 +82,6 @@ impl Default for DexCostParams {
     }
 }
 
-/// CEX–DEX 策略参数。
-#[derive(Clone, Debug)]
-pub struct CexDexParams {
-    pub gas_price_gwei: Decimal,
-    pub native_price_usd: Decimal,
-    pub delay_reserve_bps: Decimal,
-    pub compensation_bps: Decimal,
-    pub rebalance_bps: Decimal,
-    pub slippage_bps: Decimal,
-    pub adverse_bps: Decimal,
-    pub price_protection_bps: Decimal,
-    pub depth_usage_max_pct: Decimal,
-    pub profit_discount_pct: Decimal,
-    pub ttl_sec: i64,
-    pub max_hops: usize,
-}
-
-impl Default for CexDexParams {
-    fn default() -> Self {
-        Self {
-            gas_price_gwei: Decimal::new(2, 2),
-            native_price_usd: Decimal::from(2800),
-            delay_reserve_bps: Decimal::ZERO,
-            compensation_bps: Decimal::ZERO,
-            rebalance_bps: Decimal::ZERO,
-            slippage_bps: Decimal::new(5, 1),
-            adverse_bps: Decimal::from(30),
-            price_protection_bps: Decimal::from(10),
-            depth_usage_max_pct: Decimal::from(10),
-            profit_discount_pct: Decimal::from(50),
-            ttl_sec: 30,
-            max_hops: 2,
-        }
-    }
-}
-
 /// 扫描配置。
 #[derive(Clone, Debug)]
 pub struct ScanConfig {
@@ -173,14 +136,12 @@ impl ScanContext {
 /// 策略引擎本体。风控引擎按调用传入，避免持有可变全局状态。
 pub struct StrategyEngine {
     pub dex: DexCostParams,
-    pub cex_dex: CexDexParams,
 }
 
 impl StrategyEngine {
     pub fn new() -> Self {
         Self {
             dex: DexCostParams::default(),
-            cex_dex: CexDexParams::default(),
         }
     }
 
@@ -208,18 +169,7 @@ impl StrategyEngine {
                 out.push(self.apply_risk_and_score(view, ctx, risk, o));
             }
 
-            // CEX–DEX：库存为两边预置
-            let mut cex_opps = cex_dex::scan(
-                view,
-                &self.cex_dex,
-                *notional,
-                &ctx.dex_available,
-                &ctx.cex_available,
-                cfg.cex_first,
-            );
-            for o in cex_opps.drain(..) {
-                out.push(self.apply_risk_and_score(view, ctx, risk, o));
-            }
+
         }
 
         // 同一路线 + 同一规模只保留一条，按净利降序
@@ -227,32 +177,6 @@ impl StrategyEngine {
             b.conservative_net_profit
                 .cmp(&a.conservative_net_profit)
         });
-        out
-    }
-
-    /// 只扫描 CEX–DEX 策略（DEX 原子扫描由 [dex_scan] 新引擎负责）。
-    pub fn scan_cex_dex(
-        &self,
-        view: &MarketView<'_>,
-        cfg: &ScanConfig,
-        ctx: &ScanContext,
-        risk: &RiskEngine,
-    ) -> Vec<Opportunity> {
-        let mut out = Vec::new();
-        for notional in &cfg.notional_ladder {
-            let mut opps = cex_dex::scan(
-                view,
-                &self.cex_dex,
-                *notional,
-                &ctx.dex_available,
-                &ctx.cex_available,
-                cfg.cex_first,
-            );
-            for o in opps.drain(..) {
-                out.push(self.apply_risk_and_score(view, ctx, risk, o));
-            }
-        }
-        out.sort_by(|a, b| b.conservative_net_profit.cmp(&a.conservative_net_profit));
         out
     }
 
@@ -412,9 +336,6 @@ mod tests {
         let d = DexCostParams::default();
         assert_eq!(d.max_hops, 4);
         assert_eq!(d.profit_discount_pct, Decimal::from(50));
-        let c = CexDexParams::default();
-        assert_eq!(c.price_protection_bps, Decimal::from(10));
-        assert_eq!(c.depth_usage_max_pct, Decimal::from(10));
     }
 
     #[test]
