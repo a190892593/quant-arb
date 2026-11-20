@@ -18,6 +18,7 @@ export const NAV: NavGroup[] = [
     label: "监控 MONITOR",
     items: [
       { id: "overview", label: "总览", icon: "overview", hash: "#/overview" },
+      { id: "metrics", label: "指标体系", icon: "chart", hash: "#/metrics" },
     ],
   },
   {
@@ -25,6 +26,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "scannerDex", label: "DEX–DEX 搜索引擎", icon: "scanner", hash: "#/scanner-dex" },
       { id: "sources", label: "搜索数据源配置", icon: "system", hash: "#/sources" },
+      { id: "competition", label: "竞争者分析", icon: "scanner", hash: "#/competition" },
     ],
   },
   {

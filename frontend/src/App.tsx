@@ -20,6 +20,8 @@ import { System } from "./views/System";
 import { Capability } from "./views/Capability";
 import { Pending } from "./views/Pending";
 import { DataSources } from "./views/DataSources";
+import { Metrics } from "./views/Metrics";
+import { Competition } from "./views/Competition";
 
 const ROUTES: Record<string, () => JSX.Element> = {
   overview: Overview,
@@ -36,6 +38,8 @@ const ROUTES: Record<string, () => JSX.Element> = {
   contract: Contract,
   system: System,
   sources: DataSources,
+  metrics: Metrics,
+  competition: Competition,
   capability: Capability,
 };
 
@@ -58,6 +62,8 @@ const URL_ROUTE: Record<string, string> = {
   contract: "contract",
   system: "system",
   sources: "sources",
+  metrics: "metrics",
+  competition: "competition",
   capability: "capability",
 };
 
