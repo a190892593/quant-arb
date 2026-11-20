@@ -3,8 +3,7 @@
 本仓库是 `docs/` 下规格与设计文档的**可运行实现**：本地优先（Local First）、Paper Trading、
 不广播链上交易、不提交真实 CEX 订单。年化收益目标不是验收承诺，系统也不保证盈利。
 
-- DEX 多池多跳扫描引擎需求：`docs/DEX 扫描引擎需求文档.md`
-- 本次扫描引擎升级说明：`docs/DEX扫描引擎技术升级说明.md`
+- DEX 多池多跳扫描引擎需求与升级说明：已并入 `docs/产品需求规格说明书PRDv2.2.md`（§4–§9）
 - 需求（当前）：`docs/产品需求规格说明书PRDv2.0.md`
 - 技术（当前）：`docs/总体技术设计说明书TDDv2.0.md`
 - 需求基线：`docs/产品需求规格说明书PRDv1.2.md`
@@ -64,6 +63,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 | 审计与 Paper 报告 | `/api/audit/*`、`/api/paper/performance`、`arb-backend audit` | 完成 |
 
 ## 3. 架构
+
+> 代码地图（模块职责、调用链、并发模型、持久化、常见改动落点）见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ```
 backend/src/
@@ -131,7 +132,7 @@ feed.tick → MarketView → StrategyEngine.scan
 - **风控在后端**：前端开关只发起请求，真正拦截在 `RiskEngine::evaluate`。
 - **DEX 成本口径**：AMM 手续费与滑点已含在成交价中，净利润只再扣 Gas、闪电贷、优先费、
   延迟/MEV 准备金等真实现金成本（旧实现重复扣减，新引擎已修正；见
-  `docs/DEX扫描引擎技术升级说明.md` §5）。
+  `docs/产品需求规格说明书PRDv2.2.md` §8.2）。
 - **模拟等级诚实**：机会 `model_level` 最高为 M1（状态一致性），并附 M3 压力结果；
   本机未接入 REVM，M2 返回 `UNAVAILABLE`，生命周期不会出现 VERIFIED。
 - **生命周期与状态并行**：`status` 面向前端可执行性，`lifecycle` 面向审计；
@@ -192,9 +193,12 @@ feed.tick → MarketView → StrategyEngine.scan
    见 `risk/catalog.rs` 注释）。`VERIFIED(A)` 只由 M2（REVM 复核对通过）产生；
    未做 M2 的实时机会最高为 `High(B)`。
    未接入真实成交：执行仍是 Paper，`paper.auto_execute = false`，不会自动下单。
-5. **编译目录**：本机 DSH 会话对工作区路径附加文件系统过滤，`cl.exe` 在工作区内编译
-   C 依赖会失败，因此 `backend/.cargo/config.toml` 把 target 指向 `D:/arbx-build/quant-arb`。
-   迁移机器时可删除该配置恢复默认目录。
+5. **编译目录**：本机必须把 Cargo 的 target 放在工作区之外（`backend/.cargo/config.toml`
+   指向 `D:/arbx-build/quant-arb`）。2026-11 复核过：在工作区内 `cargo build` 会稳定报
+   `cl D8050: cannot execute c1.dll`（串行 `-j 1`、加载 vcvars、清增量缓存后均复现）；
+   而把 cargo 打印的同一条 cl 命令手工执行却成功——触发点在 cargo/cc-rs 启动 cl 的方式。
+   **`cargo clean` 前必须加载 vcvars**：2026-11-20 实测加载 vcvars 后全量 clean（4.7 GiB）+ 重建成功。
+   实验记录见 [ARCHITECTURE.md](ARCHITECTURE.md) §3。
 6. **未做的部分**：永续合约/杠杆、提币与跨链桥、多交易所实盘、V4/Hook 池、
    ClickHouse/Redis、逐笔人工审批（PRD 明确不做）。
 7. **M2 / REVM 已接入**：`evm/fork.rs` 按报价区块从 RPC 读取账号/代码/存储并缓存，
@@ -292,10 +296,17 @@ feed.tick → MarketView → StrategyEngine.scan
 
 
 
+18. **RPC 模式：免费多节点轮询，可一键切付费**：`[live] rpc_mode = "free"`（默认）走公共 RPC 池轮询，
+    失败自动切换并记录每个端点的失败计数；改成 `"paid"` 并在 `paid_endpoints` 填入付费端点即可切换，
+    免费池自动保留为兜底。也可用环境变量 `ARBX_RPC_MODE=paid` 免改文件切换。
+    **WS 订阅已接入且免费可用**：2026-11-20 实测 `wss://arbitrum-one.publicnode.com`、`wss://arbitrum.drpc.org`、
+    `wss://base-rpc.publicnode.com`、`wss://base.drpc.org` 均可 `eth_subscribe newHeads` 并收到真实区块头；
+    已写入配置（`ws_endpoints`），断连 30s 重试、持续失败自动降级轮询。运行状态见 `GET /api/rpc/status`。
+
 ## 8. 测试
 
 ```
-cargo test --lib --tests   # 219 个测试（211 lib + 8 集成）
+cargo test --lib --tests   # 246 个测试（238 lib + 8 集成）
 
 # 注意：`backend/examples/*` 是开发期的一次性探针（sig*/rpc_probe/estimate_probe 等），
 # 它们引用了已删除的 strategy::cex_dex 与旧版 ForkCall 字段，编译不过，属于既有技术债。
@@ -322,7 +333,7 @@ cargo test --lib --tests   # 219 个测试（211 lib + 8 集成）
 
 ## 10. DEX 多池多跳引擎（本次升级）
 
-按 `docs/DEX 扫描引擎需求文档.md` 对原扫描功能做了整体替换：
+按 PRD v2.2 的扫描引擎要求对原扫描功能做了整体替换：
 
 - **准入前置**：Token（UNKNOWN/OBSERVING/APPROVED/RESTRICTED/REJECTED）与 Pool（验证、
   执行白名单、TVL、状态年龄、流动性）不通过就不进图。
@@ -344,4 +355,4 @@ API：`GET /api/routes`、`/api/routes/{id}`、`/api/dex/graph`、`/api/scanner/
 前端入口：`#/scanner-dex`（DEX–DEX 搜索引擎，含原路由搜索能力）。
 
 配置见 `config/default.toml` 的 `[dex_engine]`；`enabled = false` 可回退旧版三角/跨池扫描。
-完整设计、口径与限制见 [DEX 扫描引擎技术升级说明](docs/DEX扫描引擎技术升级说明.md)。
+完整设计、口径与限制见 [PRD v2.2](docs/产品需求规格说明书PRDv2.2.md)。
