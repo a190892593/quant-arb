@@ -169,7 +169,8 @@ decimals0 = 18
 decimals1 = 6
 
 [dex_engine]
-min_pool_tvl_usd = 10000
+# 与主实例（config/default.toml）保持一致：不得为了在 Base 上凑出候选池而单独放宽准入门槛。
+min_pool_tvl_usd = 25000
 max_pools = 30
 base_symbols = ["USDC", "USDbC", "DAI"]
 max_evaluate = 500

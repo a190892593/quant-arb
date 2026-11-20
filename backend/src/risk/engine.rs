@@ -675,16 +675,20 @@ mod tests {
         d
     }
 
+    /// 风控基线 §4.1：门槛 = max(2 USDC, 名义金额 × 10 bps)。
+    /// 小额由绝对下限主导，大额由 bps 主导——两者都不能为 0。
     #[test]
     fn min_profit_floor_uses_bps_rule() {
         let e = engine();
         assert_eq!(
             e.min_profit_for(StrategyType::DexTriple, dec("1000")),
-            dec("0.001")
+            dec("2"),
+            "1,000 × 10 bps = 1 USDC，低于 2 USDC 绝对下限"
         );
         assert_eq!(
             e.min_profit_for(StrategyType::DexTriple, dec("100000")),
-            dec("0.1")
+            dec("100"),
+            "100,000 × 10 bps = 100 USDC，高于绝对下限"
         );
     }
 
@@ -925,7 +929,8 @@ mod tests {
             strategy_id: Some("dex_cross".into()),
             ..Default::default()
         };
-        assert_eq!(e.effective("dex_min_profit_usd", &ctx_other), dec("0"));
+        // 未覆盖的策略仍是 §4.1 基线 2 USDC，而不是 0
+        assert_eq!(e.effective("dex_min_profit_usd", &ctx_other), dec("2"));
     }
 
     #[test]

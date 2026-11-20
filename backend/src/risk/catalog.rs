@@ -158,7 +158,8 @@ pub fn baseline() -> Vec<RiskParam> {
             severity: RiskSeverity::HardStop,
             scope: RiskScope::Global,
             dir: ParamDir::Min,
-            value: dec("0"),
+            // 风控基线 §4.1：max(2 USDC, 名义金额 × 10 bps)。不得为"产出可执行样本"下调。
+            value: dec("2"),
             min: None,
             max: None,
             source: "§4.1".into(),
@@ -173,7 +174,8 @@ pub fn baseline() -> Vec<RiskParam> {
             severity: RiskSeverity::HardStop,
             scope: RiskScope::Global,
             dir: ParamDir::Min,
-            value: dec("0.01"),
+            // 与 dex_min_profit_usd 取 max，两者共同构成 §4.1 的最低净利润门槛。
+            value: dec("10"),
             min: None,
             max: None,
             source: "§4.1".into(),
@@ -599,4 +601,52 @@ pub fn circuit_rules() -> Vec<CircuitRule> {
             recovery: "停止执行并完成安全检查".into(),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find(key: &str) -> RiskParam {
+        baseline()
+            .into_iter()
+            .find(|p| p.key == key)
+            .unwrap_or_else(|| panic!("缺少参数 {key}"))
+    }
+
+    /// 风控基线 §4.1：最低净利润 = max(2 USDC, 名义金额 × 10 bps)。
+    ///
+    /// 这两个值曾经被下调为 0 / 0.01 bps，以便在真实市场"产出可执行样本"。
+    /// 那是把验收便利放在风控底线之上，本测试的作用就是让这种下调无法再悄悄发生：
+    /// 改这两个值必须同时改文档与本测试，否则 CI 直接失败。
+    #[test]
+    fn baseline_profit_floor_matches_doc() {
+        assert_eq!(find("dex_min_profit_usd").value, dec("2"));
+        assert_eq!(find("dex_min_profit_bps").value, dec("10"));
+    }
+
+    /// 门槛参数必须是 HARD_STOP + Min 方向：只能收紧，不能被覆盖放宽。
+    #[test]
+    fn profit_floor_params_are_hard_stop_min() {
+        for key in ["dex_min_profit_usd", "dex_min_profit_bps"] {
+            let p = find(key);
+            assert_eq!(p.severity, RiskSeverity::HardStop, "{key} 必须是 HARD_STOP");
+            assert_eq!(p.dir, ParamDir::Min, "{key} 必须是 Min 方向");
+        }
+    }
+
+    /// 目录里任何"下限型"参数都不得为 0：0 等价于该条规则不存在。
+    #[test]
+    fn no_floor_param_is_disabled() {
+        for p in baseline() {
+            if p.dir == ParamDir::Min {
+                assert!(
+                    p.value > rust_decimal::Decimal::ZERO,
+                    "{} ({}) 的下限被设为 0，等于关闭该规则",
+                    p.key,
+                    p.label
+                );
+            }
+        }
+    }
 }

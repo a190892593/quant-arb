@@ -101,8 +101,9 @@ impl Default for DexScanParams {
             flash_fee_bps: Decimal::from(5),
             flash_provider: "aave-v3".into(),
             priority_fee_usd: Decimal::new(5, 2),
-            delay_reserve_bps: Decimal::ZERO,
-            mev_reserve_bps: Decimal::ZERO,
+            // 风控基线 §4.1：延迟与抢先/夹击风险准备金必须扣减，默认值不得为 0。
+            delay_reserve_bps: Decimal::from(8),
+            mev_reserve_bps: Decimal::from(8),
             profit_discount_pct: Decimal::from(50),
             ttl_sec: 30,
             min_hops: 2,
@@ -1384,6 +1385,15 @@ mod tests {
     use crate::domain::money::dec;
     use crate::domain::risk::ControlState;
     use crate::dex::math;
+
+    /// 准备金不得为 0：为 0 等于把风险成本从净利里删掉。
+    #[test]
+    fn default_params_keep_risk_reserves() {
+        let p = DexScanParams::default();
+        assert_eq!(p.delay_reserve_bps, dec("8"));
+        assert_eq!(p.mev_reserve_bps, dec("8"));
+        assert_eq!(p.profit_discount_pct, dec("50"));
+    }
 
     fn token(symbol: &str) -> Token {
         Token {

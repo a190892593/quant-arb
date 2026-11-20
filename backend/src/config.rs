@@ -309,6 +309,13 @@ pub struct DataConfig {
     /// 保留的机会记录上限（避免本地库无限增长）。
     pub keep_opportunities: usize,
     pub keep_risk_events: usize,
+    /// 保留的模拟记录上限（M1/M3 回放会持续写入，必须裁剪）。
+    #[serde(default = "default_keep_simulations")]
+    pub keep_simulations: usize,
+}
+
+fn default_keep_simulations() -> usize {
+    5_000
 }
 
 impl Default for DataConfig {
@@ -318,6 +325,7 @@ impl Default for DataConfig {
             db_file: "arbx.db".into(),
             keep_opportunities: 2_000,
             keep_risk_events: 5_000,
+            keep_simulations: 5_000,
         }
     }
 }

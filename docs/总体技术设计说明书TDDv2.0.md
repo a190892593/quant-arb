@@ -165,7 +165,7 @@ scripts/
 | 配置 | 说明 |
 |---|---|
 | `[server]` | host/port/ui_dir（默认 `frontend/dist`）/cors |
-| `[data]` | dir/db_file/保留条数 |
+| `[data]` | dir/db_file/keep_opportunities/keep_simulations/keep_risk_events |
 | `[paper]` | 期初权益、分配、扫描周期、TTL、档位、并发 |
 | `[cex]` | Binance 符号、费率、盘口档数（仅定价/数据质量，不产生 CEX–DEX 机会） |
 | `[dex]` | Gas 兜底、闪贷费、每跳 Gas |
@@ -217,8 +217,18 @@ WAL 模式，单写者；核心表：
 
 ### 6.3 数据保留
 
-- 机会/风险事件按配置截断；
-- 审计/账本不自动删除；
+| 表 | 保留策略 | 触发时机 |
+|---|---|---|
+| `opportunities` | `data.keep_opportunities`（默认 2,000） | 每次扫描写入后 |
+| `dex_routes` / `scan_runs` | 各保留最近 2,000 条 | 每 60 轮扫描 |
+| `route_fingerprints` | 随路线级联 | 每 60 轮扫描 |
+| `simulations` | `data.keep_simulations`（默认 5,000） | 首轮扫描一次 + 每 60 轮扫描 |
+| 审计 / 账本 / 风控事件 | 不自动删除 | — |
+
+- **`simulations` 只保存人工触发的运行**（`POST /api/simulations`）。路线自身的 M1/M3
+  结果已随 `dex_routes.json` 一并持久化，不再逐条复制；
+  历史上该表每条路线每轮扫描插 2 行（约 250 行/秒），18 小时累积 500 万行 / 5.5 GB，
+  已通过删除冗余写入 + 定期裁剪修复（库从 5.4 GB 降至 40 MB）；
 - Paper 快照可从 DB/账本恢复。
 
 ---

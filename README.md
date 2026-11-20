@@ -145,6 +145,8 @@ feed.tick → MarketView → StrategyEngine.scan
 
 ## 5. 数据与持久化
 
+> 数据库只保留必要记录：机会 2,000 条、路线/扫描各 2,000 条、模拟 5,000 条（data.keep_*）。simulations 只记录人工触发的运行，路线自带的 M1/M3 结果随路线 JSON 一起存储。
+
 - 表结构对应 TDD §10 的主要实体：`chains`、`tokens`、`pools`、`pool_states`、
   `cex_instruments`、`opportunities`、`trade_plans`、`executions`、`cex_fills`、
   `execution_events`、`unwind_events`、`accounts`、`ledger_entries`、`risk_events`、
@@ -212,11 +214,18 @@ feed.tick → MarketView → StrategyEngine.scan
    公共 RPC 延迟导致的报价年龄在 `feed_health` / `block_age_ms` 中如实展示。
 10. **版本控制**：仓库已初始化，远端为 <https://github.com/a190892593/quant-arb.git>；
     `.gitignore` 排除构建产物、本地数据库与前端依赖。
-11. **套利发现模式（当前配置）**：为了在真实市场中产出可执行样本，`[dex_engine]`
-    把 `min_profit` 下调到 0.01 bps / $0，准备金（delay/hedge/rebalance/mev）设为 0，
-    仅保留 0.5 bps 滑点；CEX taker 按 BNB 抵扣后的 7.5 bps 计。
-    这不是保守执行口径：M3 压力（25 bps 不利变动）仍会给出负净利，实盘前必须恢复
-    `risk/catalog.rs` 的保守门槛与准备金。池表里的 Uniswap V3 `fee_bps` 已按
+11. **门槛口径已恢复基线，不再为"产出样本"让步**：此前为了让空跑的市场产出可执行样本，
+    `min_profit` 曾被下调到 0.01 bps / $0、延迟与 MEV 准备金设为 0、CEX taker 按 7.5 bps 计。
+    该口径已撤销，当前强制执行为：
+    - `dex_min_profit_usd = 2` USDC、`dex_min_profit_bps = 10` bps，取 `max`（风控基线 §4.1）；
+    - 延迟 / MEV 准备金 8 bps，由 `search_config::MIN_RESERVE_BPS` 硬性夹紧，
+      配置文件、API、界面都只能上调（风控基线 §4.1「必须扣减」）；
+    - CEX 现货 taker 按未打折的 10 bps 计。
+    这些值由单元测试锁定（`risk::catalog::tests::baseline_profit_floor_matches_doc`、
+    `search_config::tests::reserves_cannot_be_zeroed`），下调会直接让测试失败。
+    代价是真实市场里可执行样本会显著变少，甚至长时间为 0——那说明当前行情确实不满足门槛，
+    属于结论而不是缺陷，不允许再用调低门槛的方式"制造"样本。
+    池表里的 Uniswap V3 `fee_bps` 已按
     “fee 单位 ÷100” 归一化（500→5、3000→30、10000→100），并去除重复地址，
     否则会出现 5%/30% 手续费的重复池，导致路由绕行、错过 1 跳机会。
     期初库存额外配置 0.02 BTC / 0.02 WBTC（DEX 侧），用于跨池报价；
@@ -286,7 +295,11 @@ feed.tick → MarketView → StrategyEngine.scan
 ## 8. 测试
 
 ```
-cargo test          # 213 个测试（205 lib + 8 集成）
+cargo test --lib --tests   # 219 个测试（211 lib + 8 集成）
+
+# 注意：`backend/examples/*` 是开发期的一次性探针（sig*/rpc_probe/estimate_probe 等），
+# 它们引用了已删除的 strategy::cex_dex 与旧版 ForkCall 字段，编译不过，属于既有技术债。
+# 因此用 `--lib --tests` 而不是裸 `cargo test`；清理这些探针后可以恢复裸命令。
 ```
 
 - 领域层：金额精度、枚举契约、计划哈希、Decimal JSON 形状。

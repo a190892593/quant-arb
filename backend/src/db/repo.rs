@@ -770,21 +770,10 @@ pub fn save_route_records(db: &Db, routes: &[RouteScanRecord]) -> Result<()> {
                     to_json(&r.fingerprints)?,
                 ],
             )?;
-            for sim in [r.simulation.as_ref(), r.stress.as_ref()].into_iter().flatten() {
-                tx.execute(
-                    "INSERT INTO simulations(simulation_id, route_id, level, status, created_at, json)
-                     VALUES(?1,?2,?3,?4,?5,?6)
-                     ON CONFLICT(simulation_id) DO UPDATE SET status=excluded.status, json=excluded.json",
-                    params![
-                        sim.simulation_id,
-                        r.route_id,
-                        sim.level.as_str(),
-                        sim.status.as_str(),
-                        dt_to_ms(sim.created_at),
-                        to_json(sim)?,
-                    ],
-                )?;
-            }
+            // 注意：M1/M3 结果已随 r 一起写入 dex_routes.json，无需再逐条复制到
+            // simulations 表。此前每条路线每轮扫描都会插入 2 行（190 路线 × 1.5s
+            // ≈ 250 行/秒，一天 500 万行 / 5.5 GB）。simulations 表只保存
+            // 用户通过 POST /api/simulations 主动触发的运行记录。
         }
         Ok(())
     })
@@ -888,6 +877,20 @@ pub fn prune_scan_runs(db: &Db, keep: usize) -> Result<usize> {
     let n = db.execute(
         "DELETE FROM scan_runs WHERE run_id NOT IN (
             SELECT run_id FROM scan_runs ORDER BY started_at DESC LIMIT ?1
+        )",
+        params![keep as i64],
+    )?;
+    Ok(n)
+}
+
+/// 模拟结果按时间保留最近 `keep` 条。
+///
+/// 历史上 `simulations` 没有清理入口：18 小时就能积累 500 万行 / 5.5 GB。
+/// 现在由扫描循环定期裁剪，并在启动时执行一次。
+pub fn prune_simulations(db: &Db, keep: usize) -> Result<usize> {
+    let n = db.execute(
+        "DELETE FROM simulations WHERE simulation_id NOT IN (
+            SELECT simulation_id FROM simulations ORDER BY created_at DESC LIMIT ?1
         )",
         params![keep as i64],
     )?;

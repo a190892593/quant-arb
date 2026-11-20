@@ -430,10 +430,15 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         st.started_at.get_or_insert_with(Utc::now);
         st.last_scan_ms = started.elapsed().as_millis() as u64;
     }
-    // 每 60 轮清理一次扫描记录与路线快照，避免 DB 无限增长。
+    // 首轮扫描时先做一次即时回收（升级前的历史数据可能已积累到 GB 级）。
+    if state.stats.read().await.scans == 1 {
+        let _ = crate::db::repo::prune_simulations(&state.db, state.config.data.keep_simulations);
+    }
+    // 每 60 轮清理一次扫描记录、路线快照与模拟结果，避免 DB 无限增长。
     if state.stats.read().await.scans % 60 == 0 {
         let _ = crate::db::repo::prune_routes(&state.db, 2_000);
         let _ = crate::db::repo::prune_scan_runs(&state.db, 2_000);
+        let _ = crate::db::repo::prune_simulations(&state.db, state.config.data.keep_simulations);
     }
 
     // ---- 执行（Paper）----

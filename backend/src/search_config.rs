@@ -14,6 +14,13 @@ use crate::domain::types::TokenStatus;
 pub const WHITELIST: &str = "WHITELIST";
 pub const BLACKLIST: &str = "BLACKLIST";
 
+/// 延迟 / MEV 准备金硬下限（bps），与 `DexScanParams::default()` 同源。
+///
+/// 风控基线 §4.1 要求 DEX 净利润必须扣除"抢先交易和夹击风险准备金"，延迟风险
+/// 也被列为必须建模的成本。因此这是**硬下限**：配置文件、API、界面都只能往上调，
+/// 不能设为 0——把准备金清零等于凭空放大每条机会的净利。
+pub const MIN_RESERVE_BPS: f64 = 8.0;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TokenEntry {
     pub symbol: String,
@@ -115,8 +122,8 @@ impl Default for SearchParams {
             gas_price_gwei: 0.0,
             priority_fee_usd: 0.02,
             flash_fee_bps: 5.0,
-            delay_reserve_bps: 2.0,
-            mev_reserve_bps: 3.0,
+            delay_reserve_bps: MIN_RESERVE_BPS,
+            mev_reserve_bps: MIN_RESERVE_BPS,
             profit_discount_pct: 10.0,
             model_mismatch_max_bps: 50.0,
             stress_adverse_bps: 25.0,
@@ -408,12 +415,9 @@ impl SearchParams {
         if self.flash_fee_bps >= 0.0 {
             p.flash_fee_bps = d(self.flash_fee_bps);
         }
-        if self.delay_reserve_bps >= 0.0 {
-            p.delay_reserve_bps = d(self.delay_reserve_bps);
-        }
-        if self.mev_reserve_bps >= 0.0 {
-            p.mev_reserve_bps = d(self.mev_reserve_bps);
-        }
+        // 只能上调：0 值（旧 JSON / 界面误填）会被夹到硬下限。
+        p.delay_reserve_bps = d(self.delay_reserve_bps.max(MIN_RESERVE_BPS));
+        p.mev_reserve_bps = d(self.mev_reserve_bps.max(MIN_RESERVE_BPS));
         if self.profit_discount_pct >= 0.0 && self.profit_discount_pct <= 90.0 {
             p.profit_discount_pct = d(self.profit_discount_pct);
         }
@@ -427,5 +431,33 @@ impl SearchParams {
         if self.stress_gas_increase_pct >= 0.0 {
             p.stress.gas_increase_pct = d(self.stress_gas_increase_pct);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 准备金是风控基线要求的"必须扣减"项：配置或界面把它填 0，只会被夹回下限。
+    #[test]
+    fn reserves_cannot_be_zeroed() {
+        let mut p = crate::strategy::dex_scan::DexScanParams::default();
+        let edited = SearchParams {
+            delay_reserve_bps: 0.0,
+            mev_reserve_bps: 0.0,
+            ..SearchParams::default()
+        };
+        edited.apply(&mut p);
+        assert_eq!(p.delay_reserve_bps, crate::domain::money::dec("8"));
+        assert_eq!(p.mev_reserve_bps, crate::domain::money::dec("8"));
+    }
+
+    /// JSON 默认值与引擎默认值必须同源，否则两套"基线"会各自漂移。
+    #[test]
+    fn default_reserves_match_engine_baseline() {
+        let s = SearchParams::default();
+        let e = crate::strategy::dex_scan::DexScanParams::default();
+        assert_eq!(s.delay_reserve_bps, f64_of(e.delay_reserve_bps));
+        assert_eq!(s.mev_reserve_bps, f64_of(e.mev_reserve_bps));
     }
 }

@@ -11,6 +11,7 @@ cors = true
 dir = "data"
 db_file = "arbx.db"
 keep_opportunities = 2000
+keep_simulations = 5000
 keep_risk_events = 5000
 
 [paper]
@@ -41,7 +42,7 @@ tick_ms = 1000
 exchange = "binance"
 symbols = ["ETHUSDT", "BTCUSDT", "ETHUSDC", "BTCUSDC", "GMXUSDT"]
 # 现货 taker/maker 费率（配置声明值）。fee_confirmed=false 时风控会拒绝生成可执行机会
-taker_bps = 7.5
+taker_bps = 10.0
 maker_bps = 8.0
 fee_confirmed = true
 book_levels = 12
