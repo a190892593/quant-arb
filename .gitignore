@@ -2,17 +2,21 @@
 /backend/target/
 /backend/.cargo/config.toml
 /data/
+/instances/*/data/
+!/instances/*/config/
 /backups/
 /.build/
 *.log
 dom*.html
 probe.txt
 
-# 前端依赖与构建缓存（ui/ 由 frontend 构建后提交，保证克隆即可运行）
+# 前端依赖、构建缓存与产物（ui/ 是 vite 构建输出，由 npm run publish 生成，
+# 不纳入版本控制；克隆后执行一次 npm run publish 或 .\scripts\build-ui.ps1 即可）
 /frontend/node_modules/
 /frontend/dist/
 /frontend/tsconfig.tsbuildinfo
 /frontend/*.log
+/ui/
 
 # Windows
 Thumbs.db

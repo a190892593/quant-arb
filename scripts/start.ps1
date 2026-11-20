@@ -1,7 +1,7 @@
 # Start the ARBX backend (Axum API + scanner + paper engine + static UI).
 # Usage: .\scripts\start.ps1 [-Open] [-Build]
 
-param([switch]$Open, [switch]$Build)
+param([switch]$Open, [switch]$Build, [switch]$BuildUi)
 
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'lib.ps1')
@@ -20,6 +20,14 @@ if ($existing) {
 if ($Build -or -not (Test-Path $exe)) {
     & (Join-Path $PSScriptRoot 'build.ps1')
     if (-not (Test-Path $exe)) { throw "backend executable not found: $exe" }
+}
+
+# 前端产物（ui/）不进版本库：缺失时自动构建一次
+$uiIndex = Join-Path $root 'ui\index.html'
+if ($BuildUi -or -not (Test-Path $uiIndex)) {
+    Write-Host 'ui/index.html missing — building frontend (first run / clean clone) ...'
+    & (Join-Path $PSScriptRoot 'build-ui.ps1')
+    if (-not (Test-Path $uiIndex)) { throw "frontend build did not produce ui/index.html" }
 }
 
 $dataDir = Join-Path $root 'data'
