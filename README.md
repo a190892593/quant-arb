@@ -22,8 +22,9 @@
 # 若直接运行 .ps1，请先为当前进程放行一次：
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
-.\scripts\build.ps1          # 首次构建（自动加载 MSVC 环境）
-.\scripts\start.ps1 -Open    # 启动后端并打开界面
+.\scripts\start.ps1 -Open    # 一键启动：缺后端则编译、缺前端产物则构建，然后打开界面
+.\scripts\build.ps1          # 只编译后端（自动加载 MSVC 环境）
+.\scripts\build-ui.ps1       # 只构建前端（必要时先 npm install）
 .\scripts\status.ps1         # 查看扫描/账本/风控状态
 .\scripts\stop.ps1           # 停止（数据保留）
 .\scripts\backup.ps1         # 一致性备份到 backups/
@@ -32,7 +33,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\test.ps1           # 全部测试
 ```
 
-- 界面：<http://127.0.0.1:8791/>（React 构建产物在 `frontend/dist/`，由后端同源托管）
+- 界面：<http://127.0.0.1:8791/>（React 构建产物在 `frontend/dist/`，由后端同源托管；产物不入版本库）
 - API：`http://127.0.0.1:8791/api/*`，WebSocket：`ws://127.0.0.1:8791/ws`
 - 端口默认 8791（本机 8787 已被其他服务占用）；可用 `ARBX_PORT` 覆盖
 - 日志：`data/server.out.log` / `data/server.err.log`
@@ -52,11 +53,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 | CEX 公共行情与订单簿 | `backend/src/cex/`（快照+增量、缺口失效、深度成交、Binance 只读适配） | 完成 |
 | 历史审计数据导入/校验/重放 | `arb-backend audit` CLI + `POST /api/audit/jobs`（只审计已记录数据） | 部分（见 §7） |
 | DEX–DEX 套利扫描 | 新引擎 `strategy/dex_scan.rs`（2–5 跳，默认）；旧 `strategy/dex_arb.rs` 仅作回退 | 完成 |
-| CEX–DEX 对冲扫描 | `strategy/cex_dex.rs`（双向、盘口深度、延迟/补偿成本） | 完成 |
+| CEX–DEX 对冲扫描 | `strategy/cex_dex.rs` | **已移除**（0720352 移除扫描、cece2f1 移除策略本体） |
 | 统一机会评分与盈亏推演 | `strategy/cost.rs`、`strategy/scorer.rs`、`domain/opportunity.rs` | 完成 |
-| 统一 Paper Trading 引擎 | `backend/src/paper/`（DEX 模拟、CEX 深度成交、双腿状态机、补偿） | 完成 |
+| 统一 Paper Trading 引擎 | `backend/src/paper/`（DEX 原子执行；CEX 双腿状态机已移除） | 完成 |
 | 策略账本与资金管理 | `backend/src/ledger/`（10 类账户、追加式流水、库存、对账、绩效） | 完成 |
-| 风控及熔断中心 | `backend/src/risk/`（49 项参数、覆盖只允许更严格、熔断窗口） | 完成 |
+| 风控及熔断中心 | `backend/src/risk/`（33 项参数、覆盖只允许更严格、熔断窗口） | 完成 |
 | 执行合约设计与测试规范 | `docs/执行合约详细设计 v1.0.md`（设计层交付） | 未编码（见 §7） |
 | 前端仪表盘 | `frontend/`（React 19 + TS + Vite，`npm run publish` 输出到 `frontend/dist/`） | 完成 |
 | 本地启动/停止/备份/恢复 | `scripts/` | 完成 |
@@ -69,16 +70,35 @@ backend/src/
 ├── domain/       领域模型（金额 Decimal、机会、计划、执行、风控、账本、报表）
 ├── dex/          准入、Token–Pool 多重图、有界搜索、指纹、报价数学、投入优化、Gas、M0–M3 模拟
 ├── cex/          订单簿引擎、深度成交模拟、Binance 公共行情适配器
-├── strategy/     成本模型、评分、三角/跨池/CEX–DEX 搜索、风控判定编排
-├── risk/         49 项风控参数基线、覆盖解析、交易前评估、熔断器
+├── strategy/     成本模型、评分、DEX 三角/跨池搜索、风控判定编排
+├── price/        标价：链上稳定币池 spot + Chainlink 校验 + CEX 兜底，含三源分歧
 ├── ledger/       追加式资金账本、库存与跨场所敞口、绩效报告
-├── paper/        Paper 执行：DEX 模拟、CEX 深度成交、双腿状态机、补偿
-├── feed/         行情来源（本地合成市场，确定性可复现）
+├── risk/         33 项风控参数基线、覆盖解析、交易前评估、熔断器
+├── paper/        Paper 执行：DEX 原子执行（CEX 双腿状态机已移除）
+├── feed/         行情来源：Arbitrum RPC（eth_call / 池状态）+ Binance 公共盘口
 ├── db/           SQLite schema 与仓储（替代独立 PostgreSQL 服务）
 ├── engine/       应用状态、扫描编排、启动恢复、期初库存注入
-└── api/          Axum HTTP + WebSocket + 静态文件托管
+└── api/          Axum HTTP + WebSocket + 静态文件托管（frontend/dist）
 ```
 
+### 仓库结构
+
+```
+quant-arb/
+├── backend/        Rust 源码（Axum + 扫描引擎 + Paper + 账本）
+├── frontend/       React 源码；dist/ 是构建产物（已忽略）
+├── config/         默认配置（default.toml）
+├── instances/      多实例配置（base/config/）；data/ 为运行态（已忽略）
+├── docs/           PRD / TDD / 合约 / 风控基线
+├── scripts/        start / stop / status / build / build-ui / backup / restore / test
+├── data/           SQLite 与运行日志（已忽略）
+├── backups/        备份（已忽略）
+├── .build/         临时与诊断产物（已忽略）
+└── start.cmd  stop.cmd  status.cmd
+```
+
+构建产物、运行态数据、日志一律不进版本库；克隆后执行 `.\scripts\start.ps1`
+会自动补建后端与前端。
 单进程同时承担 API、扫描器与 Paper 结算（TDD §2.1 允许），通过 Tokio 任务编排；
 历史审计保留独立 CLI 入口（`arb-backend audit`）。
 
@@ -91,16 +111,16 @@ feed.tick → MarketView → StrategyEngine.scan
         → Opportunity（ACTIONABLE / WATCH / REJECTED + 拒绝原因）
         → PaperEngine.build_plan → execute
         → LedgerEngine.post_batch（资产账户 ± / 费用账户 +）
-        → ExecutionRecord（状态机 + 双腿 + 补偿 + 账本关联）
+        → ExecutionRecord（状态机 + 逐腿成交 + 账本关联）
         → SQLite + WebSocket 推送 + 前端
 ```
 
 ## 4. 关键语义（与文档对齐）
 
-- **原子 vs 非原子**：DEX 三角/跨池在同一笔 EVM 事务内闭环；CEX–DEX 明确不是原子交易，
-  两腿独立成交、可部分成交、可一方回滚，必须补偿（`paper/mod.rs`）。
-- **成交以实际数量为准**：IOC 部分成交后，第二腿按实际成交量重算；FOK 未全成视为未成交。
-- **状态未知 ≠ 未成交**：超时先标记 `ORDER_STATUS_UNKNOWN`，在查询窗口内核对，
+- **只做原子策略**：DEX 三角/跨池在同一笔 EVM 事务内闭环，全成或全退；
+  CEX–DEX 非原子双腿策略已整体移除（`paper/mod.rs` 只保留 `execute_dex_atomic`）。
+- **成交以实际数量为准**：Paper 按池子实际可成交量结算，滑点即真实成交价差。
+- **状态未知 ≠ 未成交**：该状态机仅用于历史 CEX 记录展示，不再产生新执行；
   确认未成交后才结束流程，**不重发**。
 - **回滚也要付 Gas**：DEX 回滚记录 `DEX_REVERTED` 且 `GAS_EXPENSE` 入账，
   净利为负（集成测试 `dex_revert_still_pays_gas`）。
@@ -115,12 +135,12 @@ feed.tick → MarketView → StrategyEngine.scan
 - **模拟等级诚实**：机会 `model_level` 最高为 M1（状态一致性），并附 M3 压力结果；
   本机未接入 REVM，M2 返回 `UNAVAILABLE`，生命周期不会出现 VERIFIED。
 - **生命周期与状态并行**：`status` 面向前端可执行性，`lifecycle` 面向审计；
-  路线级门禁（Token/Pool 准入、同区块状态、M1 通过、容量）与 49 项风控合并判定。
+  路线级门禁（Token/Pool 准入、同区块状态、M1 通过、容量）与 33 项风控合并判定。
 
 ### 风控评估顺序（`risk/engine.rs`）
 
 暂停状态 → 数据质量 → 报价区块差/年龄 → 盘口有效性/年龄/费率未知/深度占用/深度倍数
-→ 最低净利润（DEX `max(2, 10bps)`；CEX–DEX `max(5, 30bps)`）→ Gas 占比与绝对上限
+→ 最低净利润（DEX `max(2, 10bps)`）→ Gas 占比与绝对上限
 → 价格冲击 → 库存充足性 → 闪电贷费用已知 → 日亏损/策略亏损/回撤 → 单 Token 敞口。
 
 ## 5. 数据与持久化
@@ -143,8 +163,13 @@ feed.tick → MarketView → StrategyEngine.scan
 顶栏显示 `LIVE API`；后端不可达时明确降级为离线状态，不伪造数据。
 构建与发布：`cd frontend && npm ci && npm run publish`（`tsc -b` + `vite build`，产物在 `frontend/dist/`）。克隆后可直接执行 `.\scripts\start.ps1`，脚本会在缺产物时自动构建。
 
-本次新增「路由搜索中心」（`#/routes`）：展示图层统计（池/边/Token）、候选路线、重算/复用、
-搜索耗时与截断标记，以及每条路线的逐腿明细、指纹、投入金额优化曲线、M1/M3 模拟结果和拒绝原因。
+「DEX–DEX 搜索引擎」（`#/scanner-dex`）把原来的路由搜索与 DEX 原子扫描合并为一页：
+扫描活动条 → 引擎指标（池/边/Token、候选、访问量、重算/复用、耗时、截断）→ 路线与机会合表
+（多条件排序、状态筛选、净利 USD + 起始资产双口径）→ 三个可拖拽调宽的右侧抽屉（搜索配置 /
+路线详情 / 机会详情）。原 `#/routes` 与 `#/scanner-cex` 均重定向到该页。
+
+搜索配置为右侧抽屉，25 项参数分六组，保存即生效；数据质量页提供「标价源」面板，
+展示逐 Token 的链上 spot 价与三源分歧（> 50 bps 的机会降级为观察）。
 扫描器「启动/停止」、风控「全局暂停/恢复」、机会抽屉「生成模拟执行」都调用真实 API。
 
 ## 7. 与规格的差异与限制（必须阅读）
@@ -194,7 +219,7 @@ feed.tick → MarketView → StrategyEngine.scan
     `risk/catalog.rs` 的保守门槛与准备金。池表里的 Uniswap V3 `fee_bps` 已按
     “fee 单位 ÷100” 归一化（500→5、3000→30、10000→100），并去除重复地址，
     否则会出现 5%/30% 手续费的重复池，导致路由绕行、错过 1 跳机会。
-    期初库存额外配置 0.02 BTC / 0.02 WBTC（DEX+CEX 两侧），使 CEX–DEX 双向可执行；
+    期初库存额外配置 0.02 BTC / 0.02 WBTC（DEX 侧），用于跨池报价；
     Paper 账户已重置，旧数据在 `backups/` 中。
 12. **搜索配置与 Token 注册表**：`data/search_config.json` 持久化 Token 白/黑名单与
     可编辑搜索参数；`GET/PUT /api/search/config` 读写，`POST /api/search/tokens`
@@ -202,7 +227,7 @@ feed.tick → MarketView → StrategyEngine.scan
     `dex_params`），Token 列表变更需重启后端重建 feed。
     配置里引用了未登记 Token 的池会在首次同步时通过 `token0()/token1()` 读取地址，
     再用 `symbol()/decimals()` 自动登记为白名单（`source=auto`）；黑名单 Token 会被跳过。
-    前端 `#/routes` 页面提供「搜索配置」面板：10 个可编辑参数 + Token 表 + 新增/黑名单/删除。
+    前端 `#/scanner-dex` 页头「搜索配置」按钮打开右侧抽屉：25 项参数分六组（池与准入 / 规模与跳数 / 搜索预算 / 时效与增量 / 成本与安全垫 / 一致性与压力）+ 投入阶梯 + Token 白/黑名单。
     自动登记示例：配置中的 `WETH/LINK 0.3%` 池在启动后自动登记 LINK 并纳入刷新。
 13. **全链池/Token 自动发现**：`[discovery]` 控制开关、间隔、TVL 门槛与池上限。
     后台任务每 10 分钟从 GeckoTerminal 公共 API 拉取 Arbitrum 高 TVL 池候选，再回到链上
@@ -261,17 +286,17 @@ feed.tick → MarketView → StrategyEngine.scan
 ## 8. 测试
 
 ```
-cargo test          # 216 个测试（206 lib + 10 集成）
+cargo test          # 213 个测试（205 lib + 8 集成）
 ```
 
 - 领域层：金额精度、枚举契约、计划哈希、Decimal JSON 形状。
 - DEX：V2/V3/StableSwap/Weighted 数学、跨 tick、池集合索引；准入、多重图、指纹、有界搜索、
   投入优化、Gas 分项、M1/M3 模拟、增量缓存。
-- CEX：盘口序号缺口/乱序失效、逐档吃单、IOC/FOK/限价、精度与费率、Binance 解析。
-- 风控：49 项参数、门槛计算、逐项破坏的拒绝 key、覆盖严格性、熔断窗口。
+- CEX：盘口序号缺口/乱序失效、逐档吃单、精度与费率、Binance 解析（仅行情，不产出机会）。
+- 风控：33 项参数、门槛计算、逐项破坏的拒绝 key、覆盖严格性、熔断窗口。
 - 账本：期初分配、透支拒绝、批量原子性、费用账户、绩效与回撤、导出恢复。
 - 集成：`tests/paper_flow.rs`（DEX 成功/回滚/资金不足/计划过期/盘口方向）、
-  `tests/cex_dex_flow.rs`（双腿完成/部分成交重算/CEX 未成交不执行第二腿）、
+  
   `tests/multihop_scan.rs`（合成市场端到端：指纹唯一、优化自洽、增量复用、落库重读）。
 
 ## 9. 安全声明
@@ -279,7 +304,7 @@ cargo test          # 216 个测试（206 lib + 10 集成）
 - 第一阶段没有实盘签名器、没有 CEX 下单凭据、没有提款权限。
 - 所有"执行"都是本地模拟；`live_trading_enabled` 恒为 `false`。
 - 风控硬限制由后端强制；前端开关不构成授权。
-- 不能用合约最低回款检查替代 CEX–DEX 双腿风险检查（两者在代码中分离）。
+
 - 扫描引擎不持有私钥、不广播交易；所有机会都能追溯到池、区块、报价与模拟记录。
 
 ## 10. DEX 多池多跳引擎（本次升级）
@@ -296,13 +321,14 @@ cargo test          # 216 个测试（206 lib + 10 集成）
   可盈利投入与曲线。
 - **成本与 Gas**：按 PRD §5.5 口径只扣真实现金成本；Gas 分项（AMM/转账/Executor/
   闪电贷/Approve）。
+- **标价**：链上稳定币池 spot 为主源，Chainlink 校验，CEX 兜底；三源分歧 > 50 bps 的机会降级为观察；净利同时给出 USD 与起始资产双口径。
 - **模拟**：M1 同区块状态一致性 + M3 压力；M2 未接入 REVM 时显式 UNAVAILABLE，
   不宣称 VERIFIED。
 - **增量扫描**：池 → 路线反向索引，只重算受影响的路线并复用其余报价。
 
 API：`GET /api/routes`、`/api/routes/{id}`、`/api/dex/graph`、`/api/scanner/engine`、
 `/api/simulations`、`POST /api/simulations`；PRD §15 的 `/api/v1/*` 别名同步可用。
-前端入口：`#/routes`（路由搜索中心）。
+前端入口：`#/scanner-dex`（DEX–DEX 搜索引擎，含原路由搜索能力）。
 
 配置见 `config/default.toml` 的 `[dex_engine]`；`enabled = false` 可回退旧版三角/跨池扫描。
 完整设计、口径与限制见 [DEX 扫描引擎技术升级说明](docs/DEX扫描引擎技术升级说明.md)。

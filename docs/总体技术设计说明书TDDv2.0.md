@@ -8,7 +8,7 @@
 | 基线版本 | TDD v1.2 |
 | 适用代码 | `backend/`（Rust）、`frontend/`（React） |
 | 更新日期 | 2026-11-20 |
-| 修订 | 0720352 移除 CEX 扫描；ef33774 标价链上主源 + 净利双口径；cece2f1 移除 CEX–DEX 非原子策略 |
+| 修订 | 0720352 移除 CEX 扫描；ef33774 标价链上主源；cece2f1 移除 CEX–DEX 策略；b134477 前端产物迁至 frontend/dist 且不入版本库 |
 | 运行形态 | 本地双实例（Arbitrum 8791 / Base 8792） |
 | 交易阶段 | Research + Paper，Live 关闭 |
 
@@ -66,14 +66,14 @@ Arbitrum 实例 (8791)                Base 实例 (8792)
 │ workspace: data/    │            │ workspace: instances/base/data/ │
 └─────────┬───────────┘            └─────────┬───────────┘
           │                                  │
-          └────────── UI (ui/) ──────────────┘
-                  同一份静态构建
+          └──── UI (frontend/dist) ─────────┘
+              同一份静态构建（构建产物不入版本库）
 ```
 
 - `ARBX_PROFILE=base` 触发 TOML 深合并；
 - `ARBX_WORKSPACE` 决定数据目录；
 - `ARBX_PORT` 覆盖端口；
-- `ARBX_UI_DIR` 指向 UI 构建目录；
+- `ARBX_UI_DIR` 指向 UI 构建目录（默认 `frontend/dist`，构建产物不入版本库）；
 - 两实例独立数据库、独立 feed、独立扫描器。
 
 ### 3.2 启动流程
@@ -82,8 +82,12 @@ Arbitrum 实例 (8791)                Base 实例 (8792)
 2. 初始化 SQLite、迁移、恢复账本快照；
 3. 构建 `LiveFeed`（Token/池发现与预热）；
 4. 构建 `DexScanParams`/`SearchConfig`；
-5. 启动 Axum HTTP/WS；
+5. 启动 Axum HTTP/WS（`ui_dir` 存在则挂载静态目录与 SPA 回落）；
 6. 启动 feed 循环、扫描循环、发现任务（可选）。
+
+`scripts/start.ps1` 在启动前做两件事：后端可执行文件缺失则 `cargo build`；
+`frontend/dist/index.html` 缺失则 `scripts/build-ui.ps1`（必要时先 `npm install`）。
+因此干净克隆后只需执行一次 `.\scripts\start.ps1`。
 
 ---
 
@@ -126,9 +130,20 @@ backend/src/
     abi.rs                 编解码
     executor.hex           executor runtime bytecode
   risk/ ledger/ paper/ db/ api/ domain/
-frontend/src/
-  views/ components/ data/ lib/ styles/
+frontend/
+  src/views/ components/ data/ lib/ styles/ ui/   React 源码
+  dist/                                          构建产物（vite 输出，不入版本库）
+  scripts/                                       构建辅助脚本
+  package.json / vite.config.ts
+scripts/
+  start.ps1 / build.ps1 / build-ui.ps1           启动与构建
+  stop.ps1 / status.ps1 / test.ps1 / backup.ps1
 ```
+
+仓库根目录只保留源码与配置：`backend/`、`frontend/`、`config/`、`docs/`、
+`instances/*/config/`、`scripts/` 与三个 `*.cmd` 入口。构建产物（`frontend/dist/`）、
+本地数据（`data/`、`instances/*/data/`）、日志与临时目录（`.build/`、`backups/`）
+全部由 `.gitignore` 排除。
 
 ---
 
@@ -149,7 +164,7 @@ frontend/src/
 
 | 配置 | 说明 |
 |---|---|
-| `[server]` | host/port/ui_dir/cors |
+| `[server]` | host/port/ui_dir（默认 `frontend/dist`）/cors |
 | `[data]` | dir/db_file/保留条数 |
 | `[paper]` | 期初权益、分配、扫描周期、TTL、档位、并发 |
 | `[cex]` | Binance 符号、费率、盘口档数（仅定价/数据质量，不产生 CEX–DEX 机会） |
@@ -639,7 +654,7 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 ### 17.5 工程约定
 
 - API 映射在 `src/data/api.ts`，类型在 `src/types.ts`；
-- 构建：`npm run publish` → `ui/`；
+- 构建：`npm run publish`（`tsc -b && vite build`）→ `frontend/dist/`，由后端同源托管；构建产物不入版本库，`scripts/build-ui.ps1` 可在克隆后一键重建。
 - 同一 UI 由两个实例共用。
 
 ---
@@ -720,6 +735,7 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 | 标价分歧阈值 | 固定 50 bps 硬编码；后续改为可配置并接入风控参数表 |
 | Chainlink 覆盖 | 仅 ETH/BTC/LINK/ARB/USDC 五个 feed；其余 Token 只有链上 spot 与 CEX 两票 |
 | 标价喂给 TVL | 池 TVL 在链上标价刷新完成前使用上一轮值（滞后一个 feed 周期，约 2–6 s） |
+| 前端产物发布 | 产物不入版本库，克隆后需构建一次（`start.ps1` 已自动化，但首次需 npm 网络） |
 
 ---
 
@@ -743,7 +759,9 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 | 标价主源 | 链上最深计价池 spot |
 | 标价校验源 | Chainlink（ETH/BTC/LINK/ARB/USDC） |
 | 标价分歧阈值 | 50 bps（超阈值机会降级为观察） |
-| 测试 | 217 |
+| UI 构建目录 | `frontend/dist`（`server.ui_dir`，产物不入版本库） |
+| 启动入口 | `scripts/start.ps1`（缺后端则编译、缺 UI 则构建） |
+| 测试 | 213（205 lib + 8 集成） |
 
 ---
 
