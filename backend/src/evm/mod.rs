@@ -9,6 +9,7 @@ pub mod atomic_sim;
 pub mod fork;
 pub mod revm_sim;
 pub mod rpc;
+pub mod ws;
 
 pub use abi::Address;
 pub use revm_sim::{ForkCall, ForkResult, call_on_fork};

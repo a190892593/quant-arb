@@ -101,7 +101,14 @@ chain_id = 42161
 rpc_primary = "https://arb1.arbitrum.io/rpc"
 rpc_fallback = "https://arbitrum-one.publicnode.com"
 # 免费 RPC 池：失败自动切换，全部无需 Key
-rpc_pool = ["https://arbitrum-one.publicnode.com"]
+rpc_pool = ["https://arbitrum-one.publicnode.com", "https://arbitrum.drpc.org"]
+# RPC mode: free = public multi-node rotation (default); paid = paid first, free pool fallback.
+# Override without editing: ARBX_RPC_MODE=paid
+rpc_mode = "free"
+paid_endpoints = []
+# Free public WS (verified 2026-11-20: eth_subscribe newHeads + real block heads).
+# Falls back to polling automatically on failure.
+ws_endpoints = ["wss://arbitrum-one.publicnode.com", "wss://arbitrum.drpc.org"]
 refresh_ms = 2000
 max_pools = 30
 # No REVM / M2: do not scan V3 tick bitmaps; quote single active range (M1).

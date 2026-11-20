@@ -6,6 +6,43 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// RPC 运行模式（环境变量 `ARBX_RPC_MODE` 优先于配置文件）。
+///
+/// - `free`：公共 RPC 多节点轮询（默认，零成本，可能有 429/延迟）；
+/// - `paid`：优先付费端点，失败回退免费池——切换只改一个配置项或环境变量。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RpcMode {
+    #[default]
+    Free,
+    Paid,
+}
+
+impl RpcMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "free" | "public" => Some(RpcMode::Free),
+            "paid" | "private" | "dedicated" => Some(RpcMode::Paid),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RpcMode::Free => "free",
+            RpcMode::Paid => "paid",
+        }
+    }
+
+    /// 环境变量优先；非法值回落到配置文件。
+    pub fn resolve(configured: RpcMode) -> RpcMode {
+        std::env::var("ARBX_RPC_MODE")
+            .ok()
+            .and_then(|v| Self::parse(&v))
+            .unwrap_or(configured)
+    }
+}
+
 /// 真实链行情配置（第一阶段只支持单个 EVM 链的只读扫描）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,6 +52,15 @@ pub struct LiveFeedConfig {
     pub rpc_fallback: String,
     /// 免费 RPC 池：主节点失败时轮换，全部不需要 Key。
     pub rpc_pool: Vec<String>,
+    /// RPC 运行模式：free（公共多节点轮询）/ paid（付费端点优先，失败回退免费池）。
+    #[serde(default)]
+    pub rpc_mode: RpcMode,
+    /// 付费端点（按优先级）。mode=paid 且非空时优先使用；为空则自动回退 free 池。
+    #[serde(default)]
+    pub paid_endpoints: Vec<String>,
+    /// WS 端点（可选，需支持 `eth_subscribe`）。为空或连接失败时自动降级为轮询。
+    #[serde(default)]
+    pub ws_endpoints: Vec<String>,
     /// 链状态轮询间隔（毫秒）。
     pub refresh_ms: u64,
     pub max_pools: usize,
@@ -97,6 +143,9 @@ impl Default for LiveFeedConfig {
                 "https://1rpc.io/arb".into(),
                 "https://arbitrum.drpc.org".into(),
             ],
+            rpc_mode: RpcMode::Free,
+            paid_endpoints: Vec::new(),
+            ws_endpoints: Vec::new(),
             refresh_ms: 1_200,
             max_pools: 128,
             tick_word_radius: 2,
@@ -698,5 +747,25 @@ fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
             }
         }
         (slot, over) => *slot = over,
+    }
+}
+
+#[cfg(test)]
+mod rpc_mode_tests {
+    use super::RpcMode;
+
+    #[test]
+    fn parses_mode_aliases() {
+        assert_eq!(RpcMode::parse("paid"), Some(RpcMode::Paid));
+        assert_eq!(RpcMode::parse("FREE"), Some(RpcMode::Free));
+        assert_eq!(RpcMode::parse("public"), Some(RpcMode::Free));
+        assert_eq!(RpcMode::parse("dedicated"), Some(RpcMode::Paid));
+        assert_eq!(RpcMode::parse("bogus"), None);
+    }
+
+    #[test]
+    fn default_mode_is_free() {
+        assert_eq!(RpcMode::default(), RpcMode::Free);
+        assert_eq!(RpcMode::default().as_str(), "free");
     }
 }

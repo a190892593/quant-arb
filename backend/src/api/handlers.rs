@@ -1763,3 +1763,643 @@ fn control_summary(c: &ControlState) -> HashMap<String, bool> {
     m.insert("global".into(), c.global.paused);
     m
 }
+
+// ---------------- 指标（V22-101）----------------
+
+/// 指标查询参数。
+#[derive(Debug, Deserialize)]
+pub struct MetricsQuery {
+    /// 统计窗口（秒），默认 300，上限 24 小时。
+    pub window_sec: Option<i64>,
+    /// 返回事件条数上限，默认 200。
+    pub limit: Option<usize>,
+}
+
+/// 窗口内各指标的 P50/P95/P99 汇总。
+pub async fn metrics_summary(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<MetricsQuery>,
+) -> ApiResult {
+    let window_sec = q.window_sec.unwrap_or(300).clamp(1, 86_400);
+    let window_ms = window_sec.saturating_mul(1_000);
+    let now = crate::domain::now_ms();
+    let store = state.metrics.lock().await;
+    let items = store.summary(window_ms, now);
+    Ok(Json(json!({
+        "generated_at": now,
+        "window_ms": window_ms,
+        "sample_events": store.len(),
+        "items": items,
+    })))
+}
+
+/// 最近指标事件（新→旧），用于逐条核查。
+pub async fn metrics_events(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<MetricsQuery>,
+) -> ApiResult {
+    let limit = q.limit.unwrap_or(200).clamp(1, 2_000);
+    let store = state.metrics.lock().await;
+    Ok(Json(json!({ "items": store.latest(limit) })))
+}
+
+/// RPC 运行状态（免费/付费模式、端点失败计数、WS 端点）。
+pub async fn rpc_status(State(state): State<Arc<AppState>>) -> ApiResult {
+    let (mode, endpoints, ws) = {
+        let feed = state.live.lock().await;
+        let rpc = feed.rpc();
+        (
+            rpc.mode().as_str().to_string(),
+            rpc.health(),
+            state.config.live.ws_endpoints.clone(),
+        )
+    };
+    Ok(Json(json!({
+        "mode": mode,
+        "endpoints": endpoints
+            .iter()
+            .map(|(u, f)| json!({"url": u, "failures": f}))
+            .collect::<Vec<_>>(),
+        "ws_endpoints": ws,
+        "note": "free=公共多节点轮询；paid=付费端点优先、免费池兜底。切换：ARBX_RPC_MODE=paid 或 [live] rpc_mode",
+    })))
+}
+
+/// 链上只读二次验证（V22-306）：对全 V3 机会用 QuoterV2 复核报价。
+#[derive(Debug, Deserialize)]
+pub struct ValidateReq {
+    pub opportunity_id: String,
+}
+
+pub async fn validate_chain(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ValidateReq>,
+) -> ApiResult {
+    let opp = {
+        let opps = state.opportunities.read().await;
+        opps.iter()
+            .find(|o| o.opportunity_id == req.opportunity_id)
+            .cloned()
+    };
+    let Some(opp) = opp else {
+        return Err(not_found("机会不存在或已过期"));
+    };
+    let Some(route) = opp.dex_route.clone() else {
+        return Err(bad("机会没有 DEX 路线"));
+    };
+    if !crate::strategy::m2::is_v3_route(&route) {
+        return Ok(Json(json!({
+            "status": "UNAVAILABLE",
+            "reason": "链上只读验证当前仅支持全 V3 路径（QuoterV2）",
+        })));
+    }
+    let tokens = state.market.read().await.tokens.clone();
+    let rpc = crate::evm::RpcClient::new(&state.config.m2.rpc, None);
+    let ev = crate::strategy::m2::verify_route(&rpc, &route, &tokens, &state.config.m2)
+        .await
+        .map_err(bad)?;
+    let status = if ev.passed {
+        "MATCH"
+    } else {
+        "CHAIN_VALIDATION_MISMATCH"
+    };
+    Ok(Json(json!({
+        "status": status,
+        "evidence": serde_json::to_value(&ev).unwrap_or(Value::Null),
+    })))
+}
+
+/// 交易排序与费用模型（V22-601/602/603）：参数化 + 显式假设标注。
+pub async fn competition_models() -> ApiResult {
+    Ok(Json(json!({
+        "base": {
+            "block_interval_ms": 200,
+            "sorting": "Sequencer FCFS；无 PGA（Denim 后 200ms 正式区块）",
+            "fee_model": "L2 执行费 + L1 数据费",
+            "fast_feed": "不适用",
+            "data_status": "ASSUMPTION",
+        },
+        "arbitrum": {
+            "block_interval_ms": 250,
+            "pga_rounds_per_block": 2,
+            "pga_round_ms": 125,
+            "sorting": "PGA（优先级费竞拍）",
+            "fast_feed": "未接入（付费）",
+            "data_status": "ASSUMPTION",
+        },
+        "caveat": "参数来自公开资料与假设，未经本地实测；用于 EV 决策时必须标注来源",
+    })))
+}
+
+/// 失败归因分布（V22-504）。
+pub async fn metrics_attribution(State(state): State<Arc<AppState>>) -> ApiResult {
+    let items = crate::db::repo::failure_attribution_counts(&state.db).unwrap_or_default();
+    let total: usize = items.iter().map(|(_, n)| n).sum();
+    Ok(Json(json!({
+        "total": total,
+        "items": items.iter().map(|(c, n)| json!({"class": c, "count": n})).collect::<Vec<_>>(),
+        "classes": crate::attribution::ALL,
+    })))
+}
+
+/// 竞争者交易列表（V23-405）。
+pub async fn competition_transactions(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CollectQuery>,
+) -> ApiResult {
+    let limit = q.blocks.unwrap_or(50).clamp(1, 500) as usize;
+    let items = crate::db::repo::competitor_transactions(&state.db, limit).unwrap_or_default();
+    let parsed: Vec<serde_json::Value> = items
+        .iter()
+        .filter_map(|s| serde_json::from_str(s).ok())
+        .collect();
+    Ok(Json(json!({ "count": parsed.len(), "items": parsed })))
+}
+
+/// 近期窗口回放（V22-309 / PH7 替代方案）。
+///
+/// 公共 RPC 不支持历史状态读取（已实测：publicnode 需个人 token、drpc 仅最新），
+/// 因此回放基于**已记录报价**复算（basis=RECORDED_QUOTE），并做窗口校验；
+/// 链上状态重建在 `chain_state` 字段明确标注 UNAVAILABLE，不伪造。
+#[derive(Debug, Deserialize)]
+pub struct ReplayReq {
+    pub route_id: String,
+    pub window_blocks: Option<u64>,
+}
+
+pub async fn audit_replay(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReplayReq>,
+) -> ApiResult {
+    let window = req.window_blocks.unwrap_or(900).clamp(1, 20_000);
+    let head = state.market.read().await.head_block;
+    let rec = {
+        let cache = state.dex_cache.lock().await;
+        cache.record(&req.route_id)
+    };
+    let value = match rec {
+        Some(r) => serde_json::to_value(&r).unwrap_or(Value::Null),
+        None => {
+            let raw = crate::db::repo::route_record_json(&state.db, &req.route_id)
+                .unwrap_or(None);
+            match raw {
+                Some(s) => serde_json::from_str(&s).unwrap_or(Value::Null),
+                None => return Err(not_found("路线不存在或未记录")),
+            }
+        }
+    };
+    let block = value.get("block_number").and_then(|v| v.as_u64()).unwrap_or(0);
+    if block == 0 || head.saturating_sub(block) > window {
+        return Ok(Json(json!({
+            "status": "OUT_OF_WINDOW",
+            "block": block,
+            "head": head,
+            "window": window,
+            "reason": "记录区块超出回放窗口；公共 RPC 不支持历史状态读取，无法重建",
+        })));
+    }
+    let legs = value
+        .get("legs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut chained = true;
+    let mut mismatches = 0usize;
+    let mut prev_out: Option<Decimal> = None;
+    for l in &legs {
+        let a_in = l
+            .get("amount_in")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<Decimal>().ok());
+        let e_out = l
+            .get("expected_out")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<Decimal>().ok());
+        if let (Some(a), Some(o)) = (a_in, e_out) {
+            if let Some(p) = prev_out {
+                if (p - a).abs() > Decimal::new(1, 6) {
+                    chained = false;
+                    mismatches += 1;
+                }
+            }
+            prev_out = Some(o);
+        }
+    }
+    let result = json!({
+        "status": "REPLAYED",
+        "basis": "RECORDED_QUOTE",
+        "block": block,
+        "age_blocks": head.saturating_sub(block),
+        "window": window,
+        "chain_state": "UNAVAILABLE",
+        "chain_state_reason": "公共 RPC 拒绝历史状态（publicnode 需个人 token / drpc 仅最新）",
+        "legs": legs.len(),
+        "legs_chained": chained,
+        "chain_mismatches": mismatches,
+        "record": value,
+    });
+    Ok(Json(result))
+}
+
+/// 竞争者画像与聚类（V22-403）：按池集合 Jaccard ≥ 0.5 做概率聚类。
+#[derive(Debug, Deserialize)]
+pub struct CompetitorQuery {
+    pub limit: Option<usize>,
+}
+
+pub async fn competition_competitors(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CompetitorQuery>,
+) -> ApiResult {
+    use std::collections::{BTreeMap, BTreeSet};
+    let limit = q.limit.unwrap_or(500).clamp(1, 2_000);
+    let raw = crate::db::repo::competitor_transactions(&state.db, limit).unwrap_or_default();
+
+    struct Profile {
+        tx: usize,
+        pools: BTreeSet<String>,
+        last_block: u64,
+    }
+    let mut by_addr: BTreeMap<String, Profile> = BTreeMap::new();
+    for s in &raw {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else {
+            continue;
+        };
+        let Some(sender) = v.get("sender").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if sender.is_empty() {
+            continue;
+        }
+        let e = by_addr.entry(sender.to_string()).or_insert(Profile {
+            tx: 0,
+            pools: BTreeSet::new(),
+            last_block: 0,
+        });
+        e.tx += 1;
+        if let Some(arr) = v.get("pools").and_then(|x| x.as_array()) {
+            for p in arr {
+                if let Some(p) = p.as_str() {
+                    e.pools.insert(p.to_string());
+                }
+            }
+        }
+        e.last_block = e
+            .last_block
+            .max(v.get("block").and_then(|x| x.as_u64()).unwrap_or(0));
+    }
+
+    // 贪心聚类：池集合 Jaccard ≥ 0.5 视为同一簇（概率识别，不是机器人身份判定）。
+    let mut clusters: Vec<(BTreeSet<String>, Vec<String>, usize)> = Vec::new();
+    for (addr, p) in &by_addr {
+        let mut placed = false;
+        for (poolset, members, count) in clusters.iter_mut() {
+            let inter = poolset.intersection(&p.pools).count() as f64;
+            let uni = poolset.union(&p.pools).count().max(1) as f64;
+            if inter / uni >= 0.5 {
+                poolset.extend(p.pools.iter().cloned());
+                members.push(addr.clone());
+                *count += p.tx;
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            clusters.push((p.pools.clone(), vec![addr.clone()], p.tx));
+        }
+    }
+
+    let addresses: Vec<_> = by_addr
+        .iter()
+        .map(|(a, p)| {
+            json!({
+                "address": a,
+                "tx_count": p.tx,
+                "last_block": p.last_block,
+                "pools": p.pools,
+            })
+        })
+        .collect();
+    let cluster_json: Vec<_> = clusters
+        .iter()
+        .enumerate()
+        .map(|(i, (_, members, count))| {
+            json!({
+                "cluster_id": format!("cl{i}"),
+                "addresses": members,
+                "tx_count": count,
+                "confidence": "PROBABILISTIC",
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "addresses": addresses,
+        "clusters": cluster_json,
+        "note": "地址 ≠ 机器人；聚类基于池集合 Jaccard ≥ 0.5 的概率识别，仅供参考",
+    })))
+}
+
+/// 竞争模拟（V22-801~803）：用竞争者到达率估计被抢概率，输出成交/错过三态与失败成本。
+#[derive(Debug, Deserialize)]
+pub struct PaperSimReq {
+    pub opportunity_id: String,
+    /// 机会暴露区块数（默认 1）。
+    pub exposure_blocks: Option<u64>,
+}
+
+pub async fn paper_competition_sim(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PaperSimReq>,
+) -> ApiResult {
+    let opp = {
+        let opps = state.opportunities.read().await;
+        opps.iter()
+            .find(|o| o.opportunity_id == req.opportunity_id)
+            .cloned()
+    };
+    let Some(opp) = opp else {
+        return Err(not_found("机会不存在或已过期"));
+    };
+    let (total, _, _) = crate::db::repo::competitor_counts(&state.db).unwrap_or((0, 0, 0));
+    let exposure = req.exposure_blocks.unwrap_or(1).clamp(1, 100);
+    let p = crate::competition::capture_probability(total as u64, 2_000, exposure);
+    // 确定性伪随机：同一机会 + 同一秒可复现。
+    let h = crate::domain::plan::fnv1a_64(&format!(
+        "{}:{}",
+        opp.opportunity_id,
+        crate::domain::now_ms() / 1_000
+    ));
+    let roll = (h % 1_000) as f64 / 1_000.0;
+    let filled = roll >= p;
+    let gas = opp.costs.get("gas");
+    let net = if filled {
+        opp.conservative_net_profit
+    } else {
+        -gas
+    };
+    let result_state = if filled { "FILLED" } else { "MISSED" };
+    let id = crate::domain::new_id("psim");
+    let payload = json!({
+        "opportunity_id": opp.opportunity_id,
+        "p_capture": p,
+        "roll": roll,
+        "state": result_state,
+        "net_usd": net,
+        "failure_cost": if filled { Decimal::ZERO } else { gas },
+        "exposure_blocks": exposure,
+    });
+    let _ = crate::db::repo::save_paper_competition_result(
+        &state.db,
+        &id,
+        &opp.opportunity_id,
+        result_state,
+        &format!("{p:.4}"),
+        &net.to_string(),
+        &payload.to_string(),
+    );
+    Ok(Json(json!({
+        "result_id": id,
+        "state": result_state,
+        "p_capture": p,
+        "net_usd": net,
+        "failure_cost": if filled { Decimal::ZERO } else { gas },
+        "competitor_txs": total,
+        "exposure_blocks": exposure,
+        "note": "概率来自 Swap 日志重建的竞争者交易；不发送真实交易",
+    })))
+}
+
+/// 竞争模拟绩效（V22-805/806）：成交/错过比例、净利、失败成本。
+pub async fn paper_competition_report(State(state): State<Arc<AppState>>) -> ApiResult {
+    let rows = crate::db::repo::paper_competition_results(&state.db, 10_000).unwrap_or_default();
+    let total = rows.len();
+    let filled = rows.iter().filter(|(s, _)| s == "FILLED").count();
+    let missed = total.saturating_sub(filled);
+    let net: Decimal = rows
+        .iter()
+        .map(|(_, n)| n.parse::<Decimal>().unwrap_or(Decimal::ZERO))
+        .sum();
+    let failure_cost: Decimal = -rows
+        .iter()
+        .filter(|(s, _)| s == "MISSED")
+        .map(|(_, n)| n.parse::<Decimal>().unwrap_or(Decimal::ZERO))
+        .sum::<Decimal>();
+    let fill_rate = if total == 0 {
+        Decimal::ZERO
+    } else {
+        Decimal::from(filled) / Decimal::from(total)
+    };
+    Ok(Json(json!({
+        "total": total,
+        "filled": filled,
+        "missed": missed,
+        "fill_rate": fill_rate,
+        "net_pnl": net,
+        "failure_cost": failure_cost,
+        "verdict": if total < 20 { "INSUFFICIENT_DATA" } else { "OK" },
+        "note": "来自 paper_competition_results；失败成本按 MISSED 的负净利汇总",
+    })))
+}
+
+/// 竞争指标（V23-404）：汇总竞争者交易并给出竞争等级。
+pub async fn competition_metrics(State(state): State<Arc<AppState>>) -> ApiResult {
+    let (total, high, blocks) = crate::db::repo::competitor_counts(&state.db).unwrap_or((0, 0, 0));
+    let level = crate::competition::classify(&crate::competition::CompetitionInput {
+        tx_count_30d: total as u64,
+        active_addresses_30d: 0,
+        route_samples: total as u64,
+        rank_changed_pct: None,
+    });
+    Ok(Json(json!({
+        "total_transactions": total,
+        "high_confidence": high,
+        "distinct_blocks": blocks,
+        "level": level.level,
+        "reason": level.reason,
+        "note": "来自 Swap 日志重建（V23-402）；地址聚类未实现，active_addresses 暂为 0",
+    })))
+}
+
+/// 采集竞争者交易（V23-401/402）：拉取最近 N 块的 Swap 日志并重建套利交易。
+#[derive(Debug, Deserialize)]
+pub struct CollectQuery {
+    /// 回看区块数，默认 50，上限 200。
+    pub blocks: Option<u64>,
+}
+
+pub async fn competition_collect(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CollectQuery>,
+) -> ApiResult {
+    let span = q.blocks.unwrap_or(50).clamp(1, 2_000);
+    let (chain_id, head) = {
+        let m = state.market.read().await;
+        (m.chain.chain_id, m.head_block)
+    };
+    if head == 0 {
+        return Err(bad("行情尚未就绪，请稍后重试"));
+    }
+    let from = head.saturating_sub(span);
+    let logs = {
+        let feed = state.live.lock().await;
+        feed.swap_logs(from, head).await.map_err(bad)?
+    };
+    let detected = crate::competition::detect_arbitrage(&logs, chain_id);
+    let saved = crate::db::repo::save_competitor_transactions(&state.db, &detected).unwrap_or(0);
+    Ok(Json(json!({
+        "head": head,
+        "window": span,
+        "logs": logs.len(),
+        "detected": detected.len(),
+        "saved": saved,
+        "items": detected,
+    })))
+}
+
+/// 机会存活时间统计（V23-501）：由生命周期事件计算 DISCOVERED→EXPIRED 时长。
+pub async fn opportunity_lifetime(State(state): State<Arc<AppState>>) -> ApiResult {
+    let durations = crate::db::repo::opportunity_lifetimes(&state.db, 5_000).unwrap_or_default();
+    let mut sorted: Vec<Decimal> = durations.iter().map(|v| Decimal::from(*v)).collect();
+    sorted.sort();
+    let n = sorted.len();
+    let verdict = if n < 20 { "INSUFFICIENT_DATA" } else { "OK" };
+    Ok(Json(json!({
+        "samples": n,
+        "verdict": verdict,
+        "p50_ms": crate::metrics::percentile(&sorted, 0.50),
+        "p95_ms": crate::metrics::percentile(&sorted, 0.95),
+        "p99_ms": crate::metrics::percentile(&sorted, 0.99),
+        "min_ms": sorted.first(),
+        "max_ms": sorted.last(),
+        "note": "由 opportunity_lifecycle_events 计算；样本 < 20 给 INSUFFICIENT_DATA",
+    })))
+}
+
+/// 实盘就绪检查器（V23-1001，替代 PH10 实盘）。
+///
+/// **永不返回 ready=true**：启用实盘需人工审批；本接口只暴露逐项阻塞原因。
+pub async fn live_readiness(State(state): State<Arc<AppState>>) -> ApiResult {
+    let execs = state.executions.read().await.len();
+    let checks = vec![
+        json!({"item": "执行合约部署", "status": "BLOCKED", "detail": "仅有设计，无 Solidity 部署（PRD §21）"}),
+        json!({"item": "私钥与签名", "status": "BLOCKED", "detail": "系统不读取/保存私钥，不签名"}),
+        json!({"item": "交易广播", "status": "BLOCKED", "detail": "不广播真实交易（live_trading_enabled=false）"}),
+        json!({"item": "风控门槛未放宽", "status": "PASS", "detail": "最低净利 2 USDC / 10 bps 由测试锁定"}),
+        json!({"item": "审计样本量", "status": if execs >= 20 { "PASS" } else { "INSUFFICIENT" }, "detail": format!("{execs} 笔执行记录")}),
+        json!({"item": "M2 覆盖率", "status": "PARTIAL", "detail": "仅全 V3 路径；混合路线为 M2-TX"}),
+        json!({"item": "人工审批", "status": "BLOCKED", "detail": "需单独评审（PRD §0.3 / §21）"}),
+    ];
+    Ok(Json(json!({
+        "ready": false,
+        "checks": checks,
+        "note": "本接口永不返回 ready=true；启用实盘需人工审批",
+    })))
+}
+
+/// 竞争强度总览（V22-501）。
+///
+/// PH4 采集未实现前，如实返回 `INSUFFICIENT_DATA`，不估算竞争强度。
+pub async fn competition_overview() -> ApiResult {
+    let level = crate::competition::classify(&crate::competition::CompetitionInput::default());
+    Ok(Json(json!({
+        "level": level.level,
+        "reason": level.reason,
+        "tx_count_30d": level.tx_count_30d,
+        "active_addresses_30d": level.active_addresses_30d,
+        "collector": "NOT_IMPLEMENTED",
+        "note": "竞争者交易采集（PH4）未实现：按 PRD §10.5 返回 INSUFFICIENT_DATA，不估算",
+    })))
+}
+
+/// 竞价模拟（V22-605）：只计算期望净收益，不发送真实交易。
+pub async fn bidding_simulate(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<crate::bid::BidInput>,
+) -> ApiResult {
+    let d = crate::bid::decide(&input);
+    let decision_id = crate::domain::new_id("dec");
+    let _ = crate::db::repo::save_competition_decision(
+        &state.db,
+        &decision_id,
+        "",
+        0,
+        &d.tier,
+        &d.decision,
+        &d.expected_net.map(|v| v.to_string()).unwrap_or_default(),
+        &serde_json::to_string(&d).unwrap_or_default(),
+    );
+    Ok(Json(json!({
+        "decision_id": decision_id,
+        "tier": d.tier,
+        "decision": d.decision,
+        "expected_net": d.expected_net,
+        "p_success": d.p_success,
+        "p_fail": d.p_fail,
+        "p_source": d.p_source,
+        "reason": d.reason,
+        "note": "研究与模拟：不发送真实交易（PRD §12.1）",
+    })))
+}
+
+/// 路线覆盖率与冷热分级（V22-205 / V22-206）。
+///
+/// 冷路线只降频不淘汰：这里如实给出三级路线数与缓存规模，供前端与审计核对。
+pub async fn routes_coverage(State(state): State<Arc<AppState>>) -> ApiResult {
+    let cache = state.dex_cache.lock().await;
+    let (hot, warm, cold) = cache.tier_stats();
+    Ok(Json(json!({
+        "routes": cache.route_count(),
+        "hot": hot,
+        "warm": warm,
+        "cold": cold,
+        "topology_sig": cache.topology_sig(),
+        "last_stats": cache.last_stats(),
+    })))
+}
+
+/// 滚动报告骨架（V22-106）：样本量、净利、失败成本、回撤、结论。
+///
+/// 样本不足直接给 `INSUFFICIENT_DATA`，不用小样本外推（PRD §14.5）。
+pub async fn metrics_report(State(state): State<Arc<AppState>>) -> ApiResult {
+    let execs = state.executions.read().await.clone();
+    let ledger = state.ledger.lock().await;
+    let n = execs.len();
+    let wins = execs.iter().filter(|e| e.net_pnl > Decimal::ZERO).count();
+    let reverts = execs
+        .iter()
+        .filter(|e| matches!(e.state, ExecutionState::DexReverted | ExecutionState::HedgeFailed))
+        .count();
+    let net: Decimal = execs.iter().map(|e| e.net_pnl).sum();
+    let failure_cost: Decimal = execs.iter().map(|e| e.gas_paid_usd).sum();
+    let equity = ledger.total_equity();
+    let start = ledger.start_equity();
+    let drawdown = (start - equity).max(Decimal::ZERO);
+    let verdict = if n < 20 {
+        "INSUFFICIENT_DATA"
+    } else if net <= Decimal::ZERO {
+        "REJECT"
+    } else if reverts * 5 > n {
+        "WATCH"
+    } else {
+        "PASS"
+    };
+    Ok(Json(json!({
+        "generated_at": crate::domain::now_ms(),
+        "sample_size": n,
+        "wins": wins,
+        "reverts": reverts,
+        "net_pnl": net,
+        "failure_cost": failure_cost,
+        "equity": equity,
+        "start_equity": start,
+        "drawdown": drawdown,
+        "verdict": verdict,
+        "attribution_classes": crate::attribution::ALL,
+        "caveats": [
+            "仅覆盖本机已记录数据",
+            "样本不足时给 INSUFFICIENT_DATA，不外推",
+            "不构成收益承诺"
+        ],
+    })))
+}

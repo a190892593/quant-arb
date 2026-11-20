@@ -152,3 +152,29 @@ impl Opportunity {
         }
     }
 }
+
+/// 机会生命周期事件（PRD v2.2 §11.1，任务 V22-103 / V22-502）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LifecycleEvent {
+    pub event_id: String,
+    pub opportunity_id: String,
+    pub chain_id: u64,
+    /// `DISCOVERED` / `STATUS_CHANGED` / `EXPIRED`
+    pub stage: String,
+    /// 事件发生时的机会状态（ACTIONABLE / WATCH / REJECTED / EXPIRED）。
+    pub status: String,
+    pub ts_ms: i64,
+}
+
+impl LifecycleEvent {
+    pub fn new(opportunity_id: &str, chain_id: u64, stage: &str, status: &str) -> Self {
+        Self {
+            event_id: crate::domain::new_id("life"),
+            opportunity_id: opportunity_id.to_string(),
+            chain_id,
+            stage: stage.to_string(),
+            status: status.to_string(),
+            ts_ms: crate::domain::now_ms(),
+        }
+    }
+}

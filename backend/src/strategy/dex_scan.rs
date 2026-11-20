@@ -203,6 +203,19 @@ pub struct CachedRoute {
     pub last_quote_at: DateTime<Utc>,
     pub price_sig: String,
     pub record: Option<RouteScanRecord>,
+    /// 复用命中次数（冷热分级依据，V22-206）。
+    pub hits: u64,
+}
+
+/// 冷热分级（V22-206）：按「是否盈利 + 复用命中」分三级。
+///
+/// 分级只影响重算频率与缓存 TTL，**不淘汰冷路线**（探索预算见 PRD §6.5）。
+fn tier_of(route: &CachedRoute) -> &'static str {
+    match route.record.as_ref() {
+        Some(r) if r.net_usd > Decimal::ZERO && route.hits >= 3 => "hot",
+        Some(r) if r.net_usd > Decimal::ZERO || route.hits > 0 => "warm",
+        _ => "cold",
+    }
 }
 
 /// 增量扫描缓存：路线集合 + 池 → 路线反向索引。
@@ -257,6 +270,21 @@ impl MultiHopCache {
         self.routes.len()
     }
 
+    /// 冷热分级计数（hot, warm, cold），V22-206。
+    pub fn tier_stats(&self) -> (usize, usize, usize) {
+        let mut hot = 0usize;
+        let mut warm = 0usize;
+        let mut cold = 0usize;
+        for r in &self.routes {
+            match tier_of(r) {
+                "hot" => hot += 1,
+                "warm" => warm += 1,
+                _ => cold += 1,
+            }
+        }
+        (hot, warm, cold)
+    }
+
     pub fn topology_sig(&self) -> &str {
         &self.topology_sig
     }
@@ -307,6 +335,7 @@ impl MultiHopCache {
                 last_quote_at: now - chrono::Duration::seconds(3600),
                 price_sig: String::new(),
                 record: None,
+                hits: 0,
             }
         }).collect();
         self.pool_index.clear();
@@ -471,16 +500,30 @@ pub fn scan(
     };
     let mut to_quote: Vec<usize> = Vec::new();
     for idx in 0..cache.routes.len() {
-        let route = &cache.routes[idx];
-        let touched = route.edges.iter().any(|e| changed.contains(&e.pool_id));
-        let stale = (now - route.last_quote_at).num_milliseconds() > params.requote_age_ms;
-        let price_changed = route.price_sig != price_signature(view, &route.edges);
-        if full || touched || stale || price_changed || route.record.is_none() {
+        // 冷热分级只调整"多久重算一次"：热路线更快重算，冷路线更慢但**不淘汰**。
+        let (touched, stale, price_changed, no_record) = {
+            let route = &cache.routes[idx];
+            let effective_age = match tier_of(route) {
+                "hot" => (params.requote_age_ms / 2).max(200),
+                "cold" => params.requote_age_ms.saturating_mul(2),
+                _ => params.requote_age_ms,
+            };
+            (
+                route.edges.iter().any(|e| changed.contains(&e.pool_id)),
+                (now - route.last_quote_at).num_milliseconds() > effective_age,
+                route.price_sig != price_signature(view, &route.edges),
+                route.record.is_none(),
+            )
+        };
+        if full || touched || stale || price_changed || no_record {
             to_quote.push(idx);
         } else {
             stats.reused += 1;
+            cache.routes[idx].hits = cache.routes[idx].hits.saturating_add(1);
         }
     }
+    // V22-204：探索预算——未探索路线（hits=0）优先进入本轮定价，避免只扫旧路线。
+    to_quote.sort_by_key(|i| cache.routes[*i].hits);
     stats.requoted = to_quote.len();
 
     let mut routes_out: Vec<RouteScanRecord> = Vec::new();
@@ -1385,6 +1428,16 @@ mod tests {
     use crate::domain::money::dec;
     use crate::domain::risk::ControlState;
     use crate::dex::math;
+
+    /// V22-308：七档资金必须逐档独立，不允许插值或合并。
+    #[test]
+    fn notional_ladder_has_seven_independent_tiers() {
+        let p = DexScanParams::default();
+        assert_eq!(p.notional_ladder.len(), 7, "七档：250/500/1000/2500/5000/7500/10000");
+        let distinct: std::collections::BTreeSet<String> =
+            p.notional_ladder.iter().map(|d| d.to_string()).collect();
+        assert_eq!(distinct.len(), 7, "七档不得重复或插值合并");
+    }
 
     /// 准备金不得为 0：为 0 等于把风险成本从净利里删掉。
     #[test]

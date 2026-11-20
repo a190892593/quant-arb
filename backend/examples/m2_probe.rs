@@ -9,7 +9,7 @@ use arb_backend::config::Config;
 use arb_backend::evm::abi::{self, Arg};
 use arb_backend::evm::revm_sim::{call_on_fork, ForkCall};
 use arb_backend::evm::RpcClient;
-use revm::primitives::Address;
+use revm::primitives::{Address, U256};
 
 fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -56,6 +56,7 @@ fn main() -> anyhow::Result<()> {
                 to: quoter,
                 data,
                 gas_limit: 3_000_000,
+                value: U256::ZERO,
             },
         )
         .await

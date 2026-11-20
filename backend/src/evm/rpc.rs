@@ -52,38 +52,24 @@ pub struct RpcClient {
     current: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     http: reqwest::Client,
     next_id: std::sync::Arc<AtomicU64>,
+    mode: crate::config::RpcMode,
+    /// 每个端点的失败计数（排障与切换依据）。
+    failures: std::sync::Arc<Vec<AtomicU64>>,
 }
 
 impl RpcClient {
     pub fn new(primary: &str, fallback: Option<&str>) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(12))
-            .user_agent("arbx-scan/0.2")
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         let mut endpoints = vec![primary.to_string()];
         if let Some(f) = fallback {
             if !f.is_empty() && !endpoints.iter().any(|x| x == f) {
                 endpoints.push(f.to_string());
             }
         }
-        Self {
-            primary: primary.to_string(),
-            fallback: endpoints.get(1).cloned(),
-            endpoints,
-            current: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            http,
-            next_id: std::sync::Arc::new(AtomicU64::new(1)),
-        }
+        Self::build(endpoints, crate::config::RpcMode::Free)
     }
 
     /// 多个免费 RPC 端点：失败自动切换并记住可用节点。
     pub fn new_pool(primary: &str, pool: &[String]) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(12))
-            .user_agent("arbx-scan/0.2")
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         let mut endpoints = vec![primary.to_string()];
         for u in pool {
             let u = u.trim();
@@ -91,13 +77,86 @@ impl RpcClient {
                 endpoints.push(u.to_string());
             }
         }
+        Self::build(endpoints, crate::config::RpcMode::Free)
+    }
+
+    /// 按运行模式装配端点：`paid` 时付费端点优先，免费池兜底；重复地址去重。
+    ///
+    /// 切换付费只需在配置里设置 `[live] rpc_mode = "paid"` + `paid_endpoints`，
+    /// 或直接用环境变量 `ARBX_RPC_MODE=paid`，不需要改代码。
+    pub fn from_live(live: &crate::config::LiveFeedConfig) -> Self {
+        let mode = crate::config::RpcMode::resolve(live.rpc_mode);
+        let mut endpoints: Vec<String> = Vec::new();
+        if mode == crate::config::RpcMode::Paid {
+            endpoints.extend(live.paid_endpoints.iter().cloned());
+        }
+        endpoints.push(live.rpc_primary.clone());
+        if !live.rpc_fallback.trim().is_empty() {
+            endpoints.push(live.rpc_fallback.clone());
+        }
+        endpoints.extend(live.rpc_pool.iter().cloned());
+        let mut uniq: Vec<String> = Vec::new();
+        for u in endpoints {
+            let u = u.trim().to_string();
+            if !u.is_empty() && !uniq.iter().any(|x| x == &u) {
+                uniq.push(u);
+            }
+        }
+        if uniq.is_empty() {
+            uniq.push(live.rpc_primary.clone());
+        }
+        Self::build(uniq, mode)
+    }
+
+    fn build(endpoints: Vec<String>, mode: crate::config::RpcMode) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(12))
+            .user_agent("arbx-scan/0.2")
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let primary = endpoints.first().cloned().unwrap_or_default();
+        let fallback = endpoints.get(1).cloned();
+        let failures = std::sync::Arc::new(
+            (0..endpoints.len())
+                .map(|_| AtomicU64::new(0))
+                .collect::<Vec<_>>(),
+        );
         Self {
-            primary: primary.to_string(),
-            fallback: endpoints.get(1).cloned(),
+            primary,
+            fallback,
             endpoints,
             current: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             http,
             next_id: std::sync::Arc::new(AtomicU64::new(1)),
+            mode,
+            failures,
+        }
+    }
+
+    pub fn mode(&self) -> crate::config::RpcMode {
+        self.mode
+    }
+
+    /// 端点健康快照：`(url, 失败计数)`。
+    pub fn health(&self) -> Vec<(String, u64)> {
+        self.endpoints
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                (
+                    u.clone(),
+                    self.failures
+                        .get(i)
+                        .map(|c| c.load(Ordering::Relaxed))
+                        .unwrap_or(0),
+                )
+            })
+            .collect()
+    }
+
+    fn note_failure(&self, idx: usize) {
+        if let Some(c) = self.failures.get(idx) {
+            c.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -154,6 +213,7 @@ impl RpcClient {
                             .map(|e| e.to_string())
                             .unwrap_or_default();
                         tracing::warn!("RPC 返回错误（{msg}），切换下一个节点 {url}");
+                        self.note_failure(idx);
                         last_err = msg;
                         continue;
                     }
@@ -162,6 +222,7 @@ impl RpcClient {
                 }
                 Err(e) => {
                     tracing::warn!("RPC 失败（{e}），切换下一个节点 {url}");
+                    self.note_failure(idx);
                     last_err = e;
                 }
             }
@@ -524,5 +585,42 @@ mod tests {
         let ids = vec![9];
         let ok = parse_batch(&json!([{"id":1,"result":"0x"}]), &ids).unwrap();
         assert!(!ok[0].ok());
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    #[test]
+    fn paid_mode_puts_paid_endpoint_first_and_keeps_free_fallback() {
+        let mut live = crate::config::LiveFeedConfig::default();
+        live.rpc_mode = crate::config::RpcMode::Paid;
+        live.paid_endpoints = vec!["https://paid.example/rpc".into()];
+        let c = RpcClient::from_live(&live);
+        assert_eq!(c.mode(), crate::config::RpcMode::Paid);
+        assert_eq!(c.endpoints()[0], "https://paid.example/rpc");
+        assert!(c.endpoints().len() > 1, "免费池必须保留兜底");
+    }
+
+    #[test]
+    fn free_mode_ignores_paid_endpoints() {
+        let mut live = crate::config::LiveFeedConfig::default();
+        live.rpc_mode = crate::config::RpcMode::Free;
+        live.paid_endpoints = vec!["https://paid.example/rpc".into()];
+        let c = RpcClient::from_live(&live);
+        assert_eq!(c.mode(), crate::config::RpcMode::Free);
+        assert!(!c.endpoints().iter().any(|u| u.contains("paid.example")));
+        assert!(c.endpoints().len() >= 2);
+    }
+
+    #[test]
+    fn endpoints_are_deduplicated() {
+        let mut live = crate::config::LiveFeedConfig::default();
+        let first = live.rpc_primary.clone();
+        live.rpc_pool = vec![first.clone(), first.clone()];
+        let c = RpcClient::from_live(&live);
+        let unique: std::collections::BTreeSet<&String> = c.endpoints().iter().collect();
+        assert_eq!(unique.len(), c.endpoints().len());
     }
 }

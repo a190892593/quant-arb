@@ -105,6 +105,8 @@ pub struct AppState {
     pub m2_evidence: Arc<RwLock<HashMap<String, crate::domain::market::M2Evidence>>>,
     /// 手工触发一次扫描的开关（API `/scanner/scan`）。
     pub scan_now: Arc<tokio::sync::Notify>,
+    /// 归一化指标事件（V22-101）：内存环形窗口 + 落库。
+    pub metrics: Arc<tokio::sync::Mutex<crate::metrics::MetricStore>>,
 }
 
 impl AppState {
@@ -175,6 +177,9 @@ impl AppState {
             simulations: Arc::new(RwLock::new(Vec::new())),
             m2_evidence: Arc::new(RwLock::new(HashMap::new())),
             scan_now: Arc::new(tokio::sync::Notify::new()),
+            metrics: Arc::new(tokio::sync::Mutex::new(
+                crate::metrics::MetricStore::default(),
+            )),
         });
         Ok(state)
     }
@@ -265,7 +270,28 @@ pub fn spawn_feed(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {    toki
         let interval = std::time::Duration::from_millis(state.config.live.refresh_ms.max(500));
         // 单次同步的硬超时：公共 RPC 抖动或大批量调用不能无限期阻塞行情刷新。
         let budget = interval.saturating_mul(10).max(std::time::Duration::from_secs(30));
+        // 可选 WS：有端点就尝试订阅 newHeads，失败自动降级为纯轮询（V22-107/108）。
+        let (head_tx, mut head_rx) = tokio::sync::mpsc::channel::<u64>(8);
+        let mut ws_alive = !state.config.live.ws_endpoints.is_empty();
+        for url in state.config.live.ws_endpoints.clone() {
+            let tx = head_tx.clone();
+            tokio::spawn(async move {
+                // 断连后 30s 重试；期间主循环按轮询工作，不受影响。
+                loop {
+                    match crate::evm::ws::watch_heads(&url, tx.clone()).await {
+                        Ok(()) => {}
+                        Err(e) => tracing::warn!("WS 订阅不可用，降级轮询: {url} — {e}"),
+                    }
+                    if tx.is_closed() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                }
+            });
+        }
+
         loop {
+            let started = std::time::Instant::now();
             let result = {
                 let mut feed = state.live.lock().await;
                 match tokio::time::timeout(budget, feed.sync()).await {
@@ -273,17 +299,114 @@ pub fn spawn_feed(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {    toki
                     Err(_) => Err(format!("链上同步超时（>{budget:?}），已保留上一份快照")),
                 }
             };
+            let elapsed = started.elapsed();
             let ok = result.is_ok();
             match result {
                 Ok(data) => {
                     let block = data.head_block;
                     let pools = data.pools.len();
+                    let chain_id = data.chain.chain_id;
                     let errors = data.health.last_error.clone();
+                    let prev_block = state.market.read().await.head_block;
+                    let prev_hash = {
+                        let m = state.market.read().await;
+                        m.pools
+                            .all()
+                            .first()
+                            .map(|p| p.state.block_hash.clone())
+                            .unwrap_or_default()
+                    };
+                    let new_hash = data
+                        .pools
+                        .all()
+                        .first()
+                        .map(|p| p.state.block_hash.clone())
+                        .unwrap_or_default();
                     *state.market.write().await = data;
                     if let Some(e) = errors {
                         tracing::warn!("链上同步部分失败: {e}");
                     }
                     tracing::debug!("链上同步完成 block={block} pools={pools}");
+                    // ---- 指标（V22-102 / V22-110）----
+                    let mut events = vec![
+                        crate::metrics::MetricEvent::latency(
+                            chain_id,
+                            "feed_sync_ms",
+                            elapsed.as_millis(),
+                        ),
+                        crate::metrics::MetricEvent::new(
+                            crate::metrics::KIND_DATA_QUALITY,
+                            chain_id,
+                            "feed_pools",
+                            Decimal::from(pools as u64),
+                            "count",
+                        ),
+                        crate::metrics::MetricEvent::new(
+                            crate::metrics::KIND_DATA_QUALITY,
+                            chain_id,
+                            "head_block",
+                            Decimal::from(block),
+                            "block",
+                        ),
+                    ];
+                    if prev_block > 0 && block > prev_block + 1 {
+                        events.push(crate::metrics::MetricEvent::new(
+                            crate::metrics::KIND_DATA_QUALITY,
+                            chain_id,
+                            "block_gap",
+                            Decimal::from(block - prev_block - 1),
+                            "block",
+                        ));
+                    }
+                    // V22-110：head 回退或同高不同哈希 → 视为重组。
+                    let reorg = block < prev_block
+                        || (block == prev_block && !prev_hash.is_empty() && new_hash != prev_hash);
+                    if reorg {
+                        events.push(crate::metrics::MetricEvent::new(
+                            crate::metrics::KIND_DATA_QUALITY,
+                            chain_id,
+                            "reorg_detected",
+                            Decimal::ONE,
+                            "count",
+                        ));
+                        tracing::warn!("检测到链重组：head {} → {}", prev_block, block);
+                    }
+                    // V22-109：统计本轮新区间的 Swap 事件（只查受跟踪池，最多回看 3 个区块）。
+                    let from_block = if prev_block == 0 {
+                        block.saturating_sub(10)
+                    } else {
+                        prev_block.saturating_add(1).max(block.saturating_sub(10))
+                    };
+                    let swap_events = {
+                        let feed = state.live.lock().await;
+                        match feed.count_swap_logs(from_block, block).await {
+                            Ok(n) => n,
+                            Err(e) => {
+                                tracing::warn!("Swap 事件查询失败: {e}");
+                                0
+                            }
+                        }
+                    };
+                    if swap_events > 0 {
+                        events.push(crate::metrics::MetricEvent::new(
+                            crate::metrics::KIND_DATA_QUALITY,
+                            chain_id,
+                            "swap_events",
+                            Decimal::from(swap_events as u64),
+                            "count",
+                        ));
+                    }
+                    let _ = crate::db::repo::save_metric_events(&state.db, &events);
+                    {
+                        let mut store = state.metrics.lock().await;
+                        for e in events {
+                            store.record(e);
+                        }
+                    }
+                    if swap_events > 0 {
+                        // V22-109：事件驱动——本轮检测到 Swap 就立即进入下一轮同步，不等轮询间隔。
+                        continue;
+                    }
                 }
                 Err(e) => {
                     tracing::error!("链上同步失败: {e}");
@@ -295,7 +418,33 @@ pub fn spawn_feed(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {    toki
             }
             // 失败时退避到 4×间隔，避免对限流端点持续施压。
             let sleep_for = if ok { interval } else { interval.saturating_mul(4) };
-            tokio::time::sleep(sleep_for).await;
+            if ws_alive {
+                // WS 有新块就提前同步；通道关闭（WS 不可用）后退回纯轮询。
+                tokio::select! {
+                    _ = tokio::time::sleep(sleep_for) => {}
+                    head = head_rx.recv() => {
+                        match head {
+                            Some(block) => {
+                                let chain_id = state.market.read().await.chain.chain_id;
+                                let mut store = state.metrics.lock().await;
+                                store.record(crate::metrics::MetricEvent::new(
+                                    crate::metrics::KIND_DATA_QUALITY,
+                                    chain_id,
+                                    "ws_head",
+                                    Decimal::from(block),
+                                    "block",
+                                ));
+                            }
+                            None => {
+                                ws_alive = false;
+                                tracing::warn!("WS 订阅通道关闭，后续按轮询同步");
+                            }
+                        }
+                    }
+                }
+            } else {
+                tokio::time::sleep(sleep_for).await;
+            }
         }
     })
 }

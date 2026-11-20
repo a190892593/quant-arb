@@ -352,7 +352,7 @@ impl LiveFeed {
 
         Ok(Self {
             chain,
-            rpc: RpcClient::new_pool(&live.rpc_primary, &live.rpc_pool),
+            rpc: RpcClient::from_live(live),
             binance: BinanceClient::new(None),
             tokens,
             pools,
@@ -1427,4 +1427,80 @@ fn dec_u128(v: u128) -> Decimal {
 /// 供 API 展示：当前配置是否具备 M2（需要 REVM）。
 pub fn m2_available() -> bool {
     false
+}
+
+impl LiveFeed {
+    /// RPC 客户端（供模式与端点健康查询）。
+    pub fn rpc(&self) -> &RpcClient {
+        &self.rpc
+    }
+
+    /// 拉取新区间原始 Swap 日志（V23-401）。
+    pub async fn swap_logs(
+        &self,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if to_block < from_block {
+            return Ok(Vec::new());
+        }
+        let addrs: Vec<String> = self
+            .pools
+            .iter()
+            .map(|p| crate::evm::abi::hex_encode(p.address.as_slice()))
+            .collect();
+        if addrs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let topics = [
+            "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+            "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67",
+            "0xb3e2773606abfd36b5bd91394b3a54d1398336c65005baf7bf7a05efeffaf75b",
+        ];
+        let filter = serde_json::json!({
+            "fromBlock": format!("0x{:x}", from_block),
+            "toBlock": format!("0x{:x}", to_block),
+            "address": addrs,
+            "topics": [topics],
+        });
+        let out = self
+            .rpc
+            .call("eth_getLogs", serde_json::json!([filter]))
+            .await?;
+        Ok(out.as_array().cloned().unwrap_or_default())
+    }
+
+    /// 统计新区间内受跟踪池的 Swap 日志数（V22-109）。
+    ///
+    /// 只覆盖 V2 / V3 / Aerodrome 的 Swap 事件 topic；查询范围由调用方限制在少数区块内，
+    /// 避免公共 RPC 的日志查询超限。
+    pub async fn count_swap_logs(&self, from_block: u64, to_block: u64) -> Result<usize, String> {
+        if to_block < from_block {
+            return Ok(0);
+        }
+        let addrs: Vec<String> = self
+            .pools
+            .iter()
+            .map(|p| crate::evm::abi::hex_encode(p.address.as_slice()))
+            .collect();
+        if addrs.is_empty() {
+            return Ok(0);
+        }
+        let topics = [
+            "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822",
+            "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67",
+            "0xb3e2773606abfd36b5bd91394b3a54d1398336c65005baf7bf7a05efeffaf75b",
+        ];
+        let filter = serde_json::json!({
+            "fromBlock": format!("0x{:x}", from_block),
+            "toBlock": format!("0x{:x}", to_block),
+            "address": addrs,
+            "topics": [topics],
+        });
+        let out = self
+            .rpc
+            .call("eth_getLogs", serde_json::json!([filter]))
+            .await?;
+        Ok(out.as_array().map(|a| a.len()).unwrap_or(0))
+    }
 }

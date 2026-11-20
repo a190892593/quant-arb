@@ -88,7 +88,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         }
     }
 
-    let (mut opps, dex_routes, dex_stats, dex_graph) = {
+    let (mut opps, dex_routes, dex_stats, dex_graph, quote_ms) = {
         let market = state.market.read().await;
         let prices = market.prices.clone();
         let head_block = market.head_block;
@@ -146,16 +146,18 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                 }
             }
         }
-        let (mut all, dex_routes, dex_stats, dex_graph) = if dex_params.enabled {
+        let (mut all, dex_routes, dex_stats, dex_graph, quote_ms) = if dex_params.enabled {
             let mut cache = state.dex_cache.lock().await;
+            let quote_started = Instant::now();
             let out = crate::strategy::dex_scan::scan(&view, &dex_params, &ctx, &mut cache);
+            let quote_ms = quote_started.elapsed().as_millis();
             let mut all: Vec<Opportunity> = out
                 .opportunities
                 .into_iter()
                 .map(|o| state.strategy.apply_risk_and_score(&view, &ctx, &risk, o))
                 .collect();
             // 已移除 CEX–DEX 扫描：本系统只做 DEX 原子套利搜索。
-            (all, out.routes, out.stats, out.graph)
+            (all, out.routes, out.stats, out.graph, quote_ms)
         } else {
             // 回退路径：dex_engine.enabled = false 时使用旧版三角/跨池扫描。
             let all = state.strategy.scan(&view, &cfg, &ctx, &risk);
@@ -171,6 +173,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                 Vec::new(),
                 stats,
                 crate::domain::dex_scan::GraphStats::default(),
+                0u128,
             )
         };
         // ---- 标价分歧门禁：三源价格分歧过大的 Token，相关机会降级为观察 ----
@@ -260,7 +263,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         }
         kept.sort_by(|a, b| b.conservative_net_profit.cmp(&a.conservative_net_profit));
 
-        (kept, dex_routes, dex_stats, dex_graph)
+        (kept, dex_routes, dex_stats, dex_graph, quote_ms)
     };
 
     // ---- 继承 M2 证据（按 route_id 保存，金额 5% 容差、区块 150 内有效）----
@@ -311,6 +314,79 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
     let actionable = opps.iter().filter(|o| o.status == OppStatus::Actionable).count();
     let rejected = opps.iter().filter(|o| o.status == OppStatus::Rejected).count();
     let watch = opps.iter().filter(|o| o.status == OppStatus::Watch).count();
+
+    // 状态一致性（V22-111）：同一快照内池状态跨块 > 1 即视为跨块拼接风险。
+    let (state_spread, state_mismatch) = {
+        let m = state.market.read().await;
+        let (mut min_b, mut max_b) = (u64::MAX, 0u64);
+        for rt in m.pools.all() {
+            let b = rt.state.block_number;
+            min_b = min_b.min(b);
+            max_b = max_b.max(b);
+        }
+        let spread = if max_b >= min_b && max_b > 0 { max_b - min_b } else { 0 };
+        (spread, spread > 1)
+    };
+
+    // ---- 生命周期事件（V22-103）：与上一轮快照对比 ----
+    {
+        let chain_id = state.market.read().await.chain.chain_id;
+        let prev: Vec<(String, String)> = {
+            let list = state.opportunities.read().await;
+            list.iter()
+                .map(|o| (o.opportunity_id.clone(), o.status.as_str().to_string()))
+                .collect()
+        };
+        let now_ids: std::collections::HashSet<&str> =
+            opps.iter().map(|o| o.opportunity_id.as_str()).collect();
+        let mut events = Vec::new();
+        for o in &opps {
+            match prev.iter().find(|(id, _)| id == &o.opportunity_id) {
+                None => events.push(crate::domain::opportunity::LifecycleEvent::new(
+                    &o.opportunity_id,
+                    o.chain_id,
+                    "DISCOVERED",
+                    o.status.as_str(),
+                )),
+                Some((_, st)) if st.as_str() != o.status.as_str() => {
+                    events.push(crate::domain::opportunity::LifecycleEvent::new(
+                        &o.opportunity_id,
+                        o.chain_id,
+                        "STATUS_CHANGED",
+                        o.status.as_str(),
+                    ))
+                }
+                _ => {}
+            }
+        }
+        for (id, st) in &prev {
+            if !now_ids.contains(id.as_str()) {
+                events.push(crate::domain::opportunity::LifecycleEvent::new(
+                    id,
+                    chain_id,
+                    "EXPIRED",
+                    st,
+                ));
+            }
+        }
+        if !events.is_empty() {
+            let _ = crate::db::repo::save_lifecycle_events(&state.db, &events);
+            let mut store = state.metrics.lock().await;
+            for e in &events {
+                store.record(
+                    crate::metrics::MetricEvent::new(
+                        crate::metrics::KIND_OPPORTUNITY,
+                        e.chain_id,
+                        "lifecycle",
+                        Decimal::ONE,
+                        "count",
+                    )
+                    .with_label("stage", &e.stage)
+                    .with_label("status", &e.status),
+                );
+            }
+        }
+    }
 
     // ---- 推送与持久化 ----
     // 本轮快照整体替换内存列表（只保留 kept），避免跨轮累积同一路线的重复条目；
@@ -471,6 +547,76 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         status: Box::new(status.clone()),
     });
     let _ = crate::db::repo::save_scanner_state(&state.db, &status);
+
+    // ---- 指标：扫描耗时与机会计数（V22-101）----
+    // 只记录可观测事实；持久化失败不影响扫描与交易链路。
+    {
+        let chain_id = state.market.read().await.chain.chain_id;
+        let mut events = vec![
+            crate::metrics::MetricEvent::latency(
+                chain_id,
+                "scan_ms",
+                started.elapsed().as_millis(),
+            ),
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_OPPORTUNITY,
+                chain_id,
+                "opportunities",
+                Decimal::from(opps.len() as u64),
+                "count",
+            ),
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_OPPORTUNITY,
+                chain_id,
+                "actionable",
+                Decimal::from(actionable as u64),
+                "count",
+            ),
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_OPPORTUNITY,
+                chain_id,
+                "rejected",
+                Decimal::from(rejected as u64),
+                "count",
+            ),
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_OPPORTUNITY,
+                chain_id,
+                "watch",
+                Decimal::from(watch as u64),
+                "count",
+            ),
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_LATENCY,
+                chain_id,
+                "quote_ms",
+                Decimal::from(quote_ms.min(u64::MAX as u128) as u64),
+                "ms",
+            ),
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_DATA_QUALITY,
+                chain_id,
+                "state_spread",
+                Decimal::from(state_spread),
+                "block",
+            ),
+        ];
+        if state_mismatch {
+            events.push(crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_DATA_QUALITY,
+                chain_id,
+                "state_mismatch",
+                Decimal::ONE,
+                "count",
+            ));
+        }
+        let _ = crate::db::repo::save_metric_events(&state.db, &events);
+        let mut store = state.metrics.lock().await;
+        for e in events {
+            store.record(e);
+        }
+    }
+
     Ok(opps.len())
 }
 
@@ -525,6 +671,30 @@ pub async fn execute_opportunity(
     let before_len = ledger.entries().len();
     let rec = paper.execute(&opp, &plan, &mut ledger, &mkt);
     let new_entries: Vec<_> = ledger.entries()[before_len..].to_vec();
+
+    // ---- 失败成本归因（V22-105）：回滚/对冲失败也要记真实成本 ----
+    if matches!(
+        rec.state,
+        ExecutionState::DexReverted | ExecutionState::HedgeFailed
+    ) {
+        let revert = rec
+            .dex_tx
+            .as_ref()
+            .and_then(|t| t.revert_reason.as_deref());
+        let class = crate::attribution::classify_execution(rec.state.as_str(), revert);
+        let mut store = state.metrics.lock().await;
+        store.record(
+            crate::metrics::MetricEvent::new(
+                crate::metrics::KIND_FAILURE_COST,
+                rec.chain_id,
+                "failure_cost",
+                rec.gas_paid_usd,
+                "usd",
+            )
+            .with_label("class", class)
+            .with_label("state", rec.state.as_str()),
+        );
+    }
 
     // 3) 统计
     ledger.record_trade(crate::ledger::engine::TradeStat {
@@ -637,8 +807,27 @@ pub fn spawn_m2(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
                 continue;
             };
             let rpc = RpcClient::new(&state.config.m2.rpc, None);
-            match m2::verify_route(&rpc, &route, &tokens, &state.config.m2).await {
+            let started = std::time::Instant::now();
+            let verified = m2::verify_route(&rpc, &route, &tokens, &state.config.m2).await;
+            let elapsed = started.elapsed();
+            match verified {
                 Ok(ev) => {
+                    // ---- 指标（V22-104）----
+                    {
+                        let mut store = state.metrics.lock().await;
+                        store.record(crate::metrics::MetricEvent::latency(
+                            opp.chain_id,
+                            "m2_ms",
+                            elapsed.as_millis(),
+                        ));
+                        store.record(crate::metrics::MetricEvent::new(
+                            crate::metrics::KIND_DATA_QUALITY,
+                            opp.chain_id,
+                            "m2_diff_bps",
+                            ev.diff_bps,
+                            "bps",
+                        ));
+                    }
                     let diff = ev.diff_bps;
                     let passed = ev.passed;
                     let detail = ev.detail.clone();

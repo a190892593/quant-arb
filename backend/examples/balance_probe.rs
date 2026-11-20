@@ -1,4 +1,4 @@
-﻿use arb_backend::evm::{abi, atomic_sim, revm_sim::{call_on_fork_with, ForkCall, ForkOverrides}};
+use arb_backend::evm::{abi, atomic_sim, revm_sim::{call_on_fork_with, ForkCall, ForkOverrides}};
 use arb_backend::evm::rpc::RpcClient;
 use revm::primitives::{Address, U256};
 
@@ -24,7 +24,7 @@ async fn main() {
     let mut data = abi::selector("balanceOf(address)").to_vec();
     let mut w = [0u8;32]; w[12..].copy_from_slice(executor.as_slice());
     data.extend(w);
-    let call = ForkCall { from: caller, to: weth, data, gas_limit: 1_000_000 };
+    let call = ForkCall { from: caller, to: weth, data, gas_limit: 1_000_000, value: U256::ZERO };
     let res = call_on_fork_with(&rpc, 42161, block, call, overrides).await.unwrap();
     let out = abi::word_at(&res.output,0).unwrap();
     let mut b=[0u8;32]; b.copy_from_slice(out);

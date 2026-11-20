@@ -8,7 +8,11 @@ port = 8792
 chain_id = 8453
 rpc_primary = "https://mainnet.base.org"
 rpc_fallback = "https://base.publicnode.com"
-rpc_pool = ["https://base.publicnode.com"]
+rpc_pool = ["https://base.publicnode.com", "https://base.drpc.org"]
+rpc_mode = "free"
+paid_endpoints = []
+# Free public WS (verified 2026-11-20).
+ws_endpoints = ["wss://base-rpc.publicnode.com", "wss://base.drpc.org"]
 refresh_ms = 2500
 max_pools = 30
 tick_word_radius = 1

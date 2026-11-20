@@ -897,6 +897,285 @@ pub fn prune_simulations(db: &Db, keep: usize) -> Result<usize> {
     Ok(n)
 }
 
+// ---------------- 指标事件（V22-101）----------------
+
+/// 批量写入指标事件（幂等：event_id 冲突忽略）。
+pub fn save_metric_events(db: &Db, events: &[crate::metrics::MetricEvent]) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    db.with_tx(|tx| {
+        for e in events {
+            tx.execute(
+                "INSERT INTO metric_events(event_id, kind, chain_id, metric, value, unit, ts_ms, labels_json)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+                 ON CONFLICT(event_id) DO NOTHING",
+                params![
+                    e.event_id,
+                    e.kind,
+                    e.chain_id as i64,
+                    e.metric,
+                    e.value.to_string(),
+                    e.unit,
+                    e.ts_ms,
+                    to_json(&e.labels)?,
+                ],
+            )?;
+        }
+        Ok(())
+    })
+}
+
+/// 指标事件按时间保留最近 `keep` 条（防止无限增长）。
+pub fn prune_metric_events(db: &Db, keep: usize) -> Result<usize> {
+    let n = db.execute(
+        "DELETE FROM metric_events WHERE event_id NOT IN (
+            SELECT event_id FROM metric_events ORDER BY ts_ms DESC LIMIT ?1
+        )",
+        params![keep as i64],
+    )?;
+    Ok(n)
+}
+
+/// 批量写入机会生命周期事件（幂等：event_id 冲突忽略）。
+pub fn save_lifecycle_events(
+    db: &Db,
+    events: &[crate::domain::opportunity::LifecycleEvent],
+) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    db.with_tx(|tx| {
+        for e in events {
+            tx.execute(
+                "INSERT INTO opportunity_lifecycle_events(event_id, opportunity_id, chain_id, stage, status, ts_ms)
+                 VALUES(?1,?2,?3,?4,?5,?6)
+                 ON CONFLICT(event_id) DO NOTHING",
+                params![e.event_id, e.opportunity_id, e.chain_id as i64, e.stage, e.status, e.ts_ms],
+            )?;
+        }
+        Ok(())
+    })
+}
+
+/// 机会存活时长（毫秒）：DISCOVERED → 首次 EXPIRED 的样本（V23-501）。
+pub fn opportunity_lifetimes(db: &Db, limit: usize) -> Result<Vec<i64>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT MIN(CASE WHEN stage='DISCOVERED' THEN ts_ms END) AS first_seen,
+                    MAX(CASE WHEN stage='EXPIRED' THEN ts_ms END) AS expired_at
+             FROM opportunity_lifecycle_events
+             GROUP BY opportunity_id
+             HAVING first_seen IS NOT NULL AND expired_at IS NOT NULL
+             ORDER BY expired_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            let a: i64 = r.get(0)?;
+            let b: i64 = r.get(1)?;
+            Ok(b - a)
+        })?;
+        let mut out = Vec::new();
+        for x in rows {
+            out.push(x?);
+        }
+        Ok(out)
+    })
+}
+
+/// 读取竞争者交易（json 原文，按区块倒序）。
+pub fn competitor_transactions(db: &Db, limit: usize) -> Result<Vec<String>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT json FROM competitor_transactions ORDER BY block DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for x in rows {
+            out.push(x?);
+        }
+        Ok(out)
+    })
+}
+
+/// 竞争者交易汇总：(总数, HIGH 置信数, 涉及区块数)。
+pub fn competitor_counts(db: &Db) -> Result<(usize, usize, usize)> {
+    db.with(|c| {
+        let total: i64 =
+            c.query_row("SELECT COUNT(*) FROM competitor_transactions", [], |r| r.get(0))?;
+        let high: i64 = c.query_row(
+            "SELECT COUNT(*) FROM competitor_transactions WHERE confidence='HIGH'",
+            [],
+            |r| r.get(0),
+        )?;
+        let blocks: i64 = c.query_row(
+            "SELECT COUNT(DISTINCT block) FROM competitor_transactions",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok((total as usize, high as usize, blocks as usize))
+    })
+}
+
+/// 竞争者交易落库（V23-402）。
+pub fn save_competitor_transactions(
+    db: &Db,
+    items: &[crate::competition::DetectedArb],
+) -> Result<usize> {
+    if items.is_empty() {
+        return Ok(0);
+    }
+    let mut n = 0usize;
+    db.with_tx(|tx| {
+        for it in items {
+            let changed = tx.execute(
+                "INSERT INTO competitor_transactions(tx_hash, chain_id, block, tx_index, log_count, confidence, json)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7)
+                 ON CONFLICT(tx_hash) DO NOTHING",
+                params![
+                    it.tx_hash,
+                    it.chain_id as i64,
+                    it.block as i64,
+                    it.tx_index as i64,
+                    it.log_count as i64,
+                    it.confidence,
+                    to_json(it)?,
+                ],
+            )?;
+            n += changed;
+            if !it.sender.is_empty() {
+                tx.execute(
+                    "INSERT INTO competitor_addresses(address, chain_id, tx_count, last_block, json)
+                     VALUES(?1,?2,1,?3,'{}')
+                     ON CONFLICT(address) DO UPDATE SET
+                       tx_count = competitor_addresses.tx_count + 1,
+                       last_block = excluded.last_block",
+                    params![it.sender, it.chain_id as i64, it.block as i64],
+                )?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(n)
+}
+
+/// 读取竞争模拟结果 (state, net_usd)（V22-805/806）。
+pub fn paper_competition_results(db: &Db, limit: usize) -> Result<Vec<(String, String)>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT state, net_usd FROM paper_competition_results ORDER BY ts_ms DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for x in rows {
+            out.push(x?);
+        }
+        Ok(out)
+    })
+}
+
+/// 竞争模拟结果落库（V22-803）。
+pub fn save_paper_competition_result(
+    db: &Db,
+    result_id: &str,
+    opportunity_id: &str,
+    state: &str,
+    p_capture: &str,
+    net_usd: &str,
+    json: &str,
+) -> Result<()> {
+    db.execute(
+        "INSERT INTO paper_competition_results(result_id, opportunity_id, state, p_capture, net_usd, ts_ms, json)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(result_id) DO NOTHING",
+        params![
+            result_id,
+            opportunity_id,
+            state,
+            p_capture,
+            net_usd,
+            crate::domain::now_ms(),
+            json
+        ],
+    )?;
+    Ok(())
+}
+
+/// 读取某条路线的记录 JSON（V22-309 回放用）。
+pub fn route_record_json(db: &Db, route_id: &str) -> Result<Option<String>> {
+    db.with(|c| {
+        let mut stmt = c.prepare("SELECT json FROM dex_routes WHERE route_id = ?1")?;
+        let mut rows = stmt.query(params![route_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(row.get::<_, String>(0)?));
+        }
+        Ok(None)
+    })
+}
+
+/// 失败归因分布（V22-504）：按 12 类统计 failure_cost 事件。
+pub fn failure_attribution_counts(db: &Db) -> Result<Vec<(String, usize)>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT COALESCE(json_extract(labels_json, '$.class'), 'UNKNOWN') AS cls, COUNT(*) AS n
+             FROM metric_events WHERE metric = 'failure_cost'
+             GROUP BY cls ORDER BY n DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let cls: String = r.get(0)?;
+            let n: i64 = r.get(1)?;
+            Ok((cls, n as usize))
+        })?;
+        let mut out = Vec::new();
+        for x in rows {
+            out.push(x?);
+        }
+        Ok(out)
+    })
+}
+
+/// 竞争决策落库（V23-603）。
+pub fn save_competition_decision(
+    db: &Db,
+    decision_id: &str,
+    route_id: &str,
+    chain_id: u64,
+    tier: &str,
+    decision: &str,
+    expected_net: &str,
+    json: &str,
+) -> Result<()> {
+    db.execute(
+        "INSERT INTO competition_decisions(decision_id, route_id, chain_id, tier, decision, expected_net, ts_ms, json)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+         ON CONFLICT(decision_id) DO NOTHING",
+        params![
+            decision_id,
+            route_id,
+            chain_id as i64,
+            tier,
+            decision,
+            expected_net,
+            crate::domain::now_ms(),
+            json
+        ],
+    )?;
+    Ok(())
+}
+
+/// 生命周期事件按时间保留最近 `keep` 条。
+pub fn prune_lifecycle_events(db: &Db, keep: usize) -> Result<usize> {
+    let n = db.execute(
+        "DELETE FROM opportunity_lifecycle_events WHERE event_id NOT IN (
+            SELECT event_id FROM opportunity_lifecycle_events ORDER BY ts_ms DESC LIMIT ?1
+        )",
+        params![keep as i64],
+    )?;
+    Ok(n)
+}
+
 
 #[cfg(test)]
 mod tests {

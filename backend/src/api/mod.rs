@@ -29,6 +29,10 @@ pub fn router(state: Arc<AppState>) -> Router {
 .route("/system/prices", get(handlers::system_prices))
         .route("/system/controls", get(handlers::system_controls))
         .route("/system/database", get(handlers::system_database))
+        .route("/rpc/status", get(handlers::rpc_status))
+        .route("/metrics/summary", get(handlers::metrics_summary))
+        .route("/metrics/events", get(handlers::metrics_events))
+        .route("/metrics/report", get(handlers::metrics_report))
         .route("/system/restart-check", get(handlers::restart_check))
         .route(
             "/search/config",
@@ -67,6 +71,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         // ---- DEX 多池多跳引擎（PRD §4–§7）----
         .route("/routes", get(handlers::dex_routes))
         .route("/routes/{id}", get(handlers::dex_route_detail))
+        // 冷热分级与覆盖率：不能挂在 /routes/{id} 下，否则被动态段抢先匹配。
+        .route("/dex/coverage", get(handlers::routes_coverage))
         .route("/dex/graph", get(handlers::dex_graph))
         .route(
             "/simulations",
@@ -90,6 +96,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/paper/hedges", get(handlers::paper_hedges))
         .route("/paper/performance", get(handlers::paper_performance))
         .route("/paper/reset", post(handlers::paper_reset))
+        .route(
+            "/paper/competition-sim",
+            post(handlers::paper_competition_sim),
+        )
+        .route(
+            "/paper/competition-report",
+            get(handlers::paper_competition_report),
+        )
         .route("/executions", get(handlers::executions))
         .route("/executions/{id}", get(handlers::execution_detail))
         // ---- 风险与资金 ----
@@ -102,6 +116,34 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/risk/rules", get(handlers::risk_rules))
         .route("/inventory", get(handlers::inventory))
         .route("/ledger", get(handlers::ledger))
+        // ---- 竞争与竞价（PH5 / PH6）----
+        .route("/competition/overview", get(handlers::competition_overview))
+        .route(
+            "/competition/collect",
+            post(handlers::competition_collect),
+        )
+        .route(
+            "/competition/transactions",
+            get(handlers::competition_transactions),
+        )
+        .route("/competition/metrics", get(handlers::competition_metrics))
+        .route("/competition/models", get(handlers::competition_models))
+        .route(
+            "/competition/competitors",
+            get(handlers::competition_competitors),
+        )
+        .route(
+            "/validation/chain",
+            post(handlers::validate_chain),
+        )
+        .route("/audit/replay", post(handlers::audit_replay))
+        .route("/metrics/attribution", get(handlers::metrics_attribution))
+        .route("/opportunity-lifetime", get(handlers::opportunity_lifetime))
+        .route("/live/readiness", get(handlers::live_readiness))
+        .route(
+            "/competition/bidding/simulate",
+            post(handlers::bidding_simulate),
+        )
         // ---- 审计 ----
         .route(
             "/audit/jobs",

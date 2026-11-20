@@ -328,6 +328,124 @@ CREATE TABLE IF NOT EXISTS scan_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
 
+-- ---------- 指标事件（V22-101）----------
+CREATE TABLE IF NOT EXISTS metric_events (
+    event_id    TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    chain_id    INTEGER NOT NULL DEFAULT 0,
+    metric      TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    unit        TEXT NOT NULL,
+    ts_ms       INTEGER NOT NULL,
+    labels_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_metric_events_kind_ts ON metric_events(kind, ts_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_metric_events_metric_ts ON metric_events(metric, ts_ms DESC);
+
+-- ---------- 机会生命周期事件（V22-103）----------
+CREATE TABLE IF NOT EXISTS opportunity_lifecycle_events (
+    event_id       TEXT PRIMARY KEY,
+    opportunity_id TEXT NOT NULL,
+    chain_id       INTEGER NOT NULL DEFAULT 0,
+    stage          TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    ts_ms          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opp_lifecycle_opp ON opportunity_lifecycle_events(opportunity_id, ts_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_opp_lifecycle_ts ON opportunity_lifecycle_events(ts_ms DESC);
+
+-- ---------- 竞争决策（V23-603）----------
+CREATE TABLE IF NOT EXISTS competition_decisions (
+    decision_id  TEXT PRIMARY KEY,
+    route_id     TEXT NOT NULL DEFAULT '',
+    chain_id     INTEGER NOT NULL DEFAULT 0,
+    tier         TEXT NOT NULL,
+    decision     TEXT NOT NULL,
+    expected_net TEXT NOT NULL,
+    ts_ms        INTEGER NOT NULL,
+    json         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comp_decisions_ts ON competition_decisions(ts_ms DESC);
+
+-- ---------- 竞争者交易（V23-401/402，Swap 日志重建）----------
+CREATE TABLE IF NOT EXISTS competitor_transactions (
+    tx_hash     TEXT PRIMARY KEY,
+    chain_id    INTEGER NOT NULL DEFAULT 0,
+    block       INTEGER NOT NULL,
+    tx_index    INTEGER NOT NULL,
+    log_count   INTEGER NOT NULL,
+    confidence  TEXT NOT NULL,
+    json        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comp_tx_block ON competitor_transactions(block DESC);
+
+CREATE TABLE IF NOT EXISTS competitor_addresses (
+    address    TEXT PRIMARY KEY,
+    chain_id   INTEGER NOT NULL DEFAULT 0,
+    tx_count   INTEGER NOT NULL,
+    last_block INTEGER NOT NULL,
+    json       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS competitor_clusters (
+    cluster_id TEXT PRIMARY KEY,
+    chain_id   INTEGER NOT NULL DEFAULT 0,
+    addresses  INTEGER NOT NULL,
+    tx_count   INTEGER NOT NULL,
+    confidence TEXT NOT NULL,
+    json       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS route_competition_snapshots (
+    route_key  TEXT PRIMARY KEY,
+    chain_id   INTEGER NOT NULL DEFAULT 0,
+    level      TEXT NOT NULL,
+    tx_count   INTEGER NOT NULL,
+    ts_ms      INTEGER NOT NULL,
+    json       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_competition_results (
+    result_id      TEXT PRIMARY KEY,
+    opportunity_id TEXT NOT NULL,
+    state          TEXT NOT NULL,
+    p_capture      TEXT NOT NULL,
+    net_usd        TEXT NOT NULL,
+    ts_ms          INTEGER NOT NULL,
+    json           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS historical_replay_jobs (
+    job_id     TEXT PRIMARY KEY,
+    route_id   TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    block      INTEGER NOT NULL,
+    window     INTEGER NOT NULL,
+    ts_ms      INTEGER NOT NULL,
+    json       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS historical_replay_results (
+    result_id  TEXT PRIMARY KEY,
+    job_id     TEXT NOT NULL,
+    basis      TEXT NOT NULL,
+    legs       INTEGER NOT NULL,
+    chained    INTEGER NOT NULL,
+    ts_ms      INTEGER NOT NULL,
+    json       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS opportunity_lifetime_stats (
+    stat_id    TEXT PRIMARY KEY,
+    samples    INTEGER NOT NULL,
+    p50_ms     TEXT,
+    p95_ms     TEXT,
+    p99_ms     TEXT,
+    ts_ms      INTEGER NOT NULL,
+    json       TEXT NOT NULL
+);
+
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, 0);
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, 0);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, 0);
 "#;

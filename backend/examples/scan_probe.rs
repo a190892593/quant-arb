@@ -1,16 +1,20 @@
-//! 扫描诊断工具：离线构造合成市场，打印各策略的候选与拒绝原因。
+//! 扫描诊断工具：离线构造合成市场，打印 DEX 候选与拒绝原因。
 //!
 //! 用法：
 //! ```text
 //! cargo run --example scan_probe
 //! ```
 //! 用于验证「为什么没有机会」这类问题，不参与生产运行。
+//!
+//! 说明：CEX–DEX 非原子策略已整体移除（PRD v2.2 §0.3），本探针只覆盖 DEX 侧。
+//! 这里探测的是旧版三角/跨池引擎（`strategy::dex_arb`，v2.0 回退路径）；v2.2 主引擎为
+//! `strategy::dex_scan`（多池多跳），其诊断通过 `/api/routes` 与 `#/scanner-dex` 页面完成。
 
 use std::collections::HashMap;
 
 use arb_backend::config::Config;
 use arb_backend::feed::demo::DemoMarket;
-use arb_backend::strategy::{cex_dex, dex_arb, CexDexParams, DexCostParams, MarketView};
+use arb_backend::strategy::{dex_arb, DexCostParams, MarketView};
 use rust_decimal::Decimal;
 
 fn main() {
@@ -89,54 +93,5 @@ fn main() {
                 );
             }
         }
-    }
-
-    println!("\n== CEX–DEX（1000 USDC）==");
-    let cd = CexDexParams::default();
-    let cex_opps = cex_dex::scan(&view, &cd, Decimal::from(1000), &available, true);
-    println!("候选 {} 条", cex_opps.len());
-    for o in cex_opps.iter().take(6) {
-        println!(
-            "{:?} dir={:?} qty={} gross={} cost={} net={} theo_bps={} quality={}",
-            o.cex_symbol,
-            o.direction,
-            o.target_qty.round_dp(6),
-            o.executable_gross_profit.round_dp(4),
-            o.total_cost.round_dp(4),
-            o.conservative_net_profit.round_dp(4),
-            o.theoretical_edge_bps.round_dp(2),
-            o.data_quality
-        );
-    }
-
-    // 手动检查一条 DEX 路径与 CEX 成本，帮助定位「为什么没有机会」
-    println!("\n== 路径与成本分解 ==");
-    if let Some((path, edges)) = cex_dex::find_best_path(
-        &view,
-        "USDC",
-        "WETH",
-        Decimal::from(1000),
-        2,
-    ) {
-        println!(
-            "best USDC->WETH: out={} impact={}bps hops={} gas={}",
-            path.amount_out.round_dp(8),
-            path.price_impact_bps.round_dp(2),
-            edges.len(),
-            path.gas_units
-        );
-        for l in &path.legs {
-            println!(
-                "   {} {}->{} in={} out={} fee={}bps",
-                l.pool_id,
-                l.token_in,
-                l.token_out,
-                l.amount_in.round_dp(6),
-                l.amount_out.round_dp(6),
-                l.fee_bps
-            );
-        }
-    } else {
-        println!("未找到 USDC->WETH 路径！");
     }
 }

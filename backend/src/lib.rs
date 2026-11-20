@@ -16,7 +16,10 @@
 //! - [`engine`] 应用状态、扫描编排与启动恢复。
 
 pub mod api;
+pub mod attribution;
+pub mod bid;
 pub mod cex;
+pub mod competition;
 pub mod config;
 pub mod db;
 pub mod dex;
@@ -25,6 +28,7 @@ pub mod engine;
 pub mod evm;
 pub mod feed;
 pub mod ledger;
+pub mod metrics;
 pub mod paper;
 pub mod price;
 pub mod risk;
