@@ -8,6 +8,7 @@ pub mod cex_dex;
 pub mod cost;
 pub mod dex_arb;
 pub mod dex_scan;
+pub mod m2;
 pub mod scorer;
 
 use chrono::{DateTime, Utc};
@@ -104,10 +105,10 @@ impl Default for CexDexParams {
         Self {
             gas_price_gwei: Decimal::new(2, 2),
             native_price_usd: Decimal::from(2800),
-            delay_reserve_bps: Decimal::from(6),
-            compensation_bps: Decimal::from(6),
-            rebalance_bps: Decimal::from(3),
-            slippage_bps: Decimal::from(3),
+            delay_reserve_bps: Decimal::ZERO,
+            compensation_bps: Decimal::ZERO,
+            rebalance_bps: Decimal::ZERO,
+            slippage_bps: Decimal::new(5, 1),
             adverse_bps: Decimal::from(30),
             price_protection_bps: Decimal::from(10),
             depth_usage_max_pct: Decimal::from(10),
@@ -212,6 +213,7 @@ impl StrategyEngine {
                 view,
                 &self.cex_dex,
                 *notional,
+                &ctx.dex_available,
                 &ctx.cex_available,
                 cfg.cex_first,
             );
@@ -242,6 +244,7 @@ impl StrategyEngine {
                 view,
                 &self.cex_dex,
                 *notional,
+                &ctx.dex_available,
                 &ctx.cex_available,
                 cfg.cex_first,
             );
@@ -363,12 +366,17 @@ impl StrategyEngine {
             depth_usage_pct: depth_usage,
         });
         opp.risk_score = score;
+        // 违规与告警都保留：告警（如低于执行门槛）用于 near-miss 展示。
         opp.rejections = decision.violations.clone();
+        opp.rejections.extend(decision.warnings.clone());
 
         if !decision.allowed {
             opp.status = OppStatus::Rejected;
         } else if opp.conservative_net_profit <= Decimal::ZERO {
             // 净利润不为正的机会只能是观察项
+            opp.status = OppStatus::Watch;
+        } else if decision.warnings.iter().any(|w| w.key == "min_profit") {
+            // 正净利但低于执行门槛：观察层，不进入执行计划。
             opp.status = OppStatus::Watch;
         } else if opp.capacity_usd < opp.target_notional {
             opp.status = OppStatus::Rejected;
@@ -438,6 +446,7 @@ mod tests {
             data_quality: DataQuality::High,
             model_level: crate::domain::market::ModelLevel::M2,
             confidence: String::new(),
+            m2: None,
             quote_timestamp: now,
             quote_block_number: 1,
             book_age_ms: 0,

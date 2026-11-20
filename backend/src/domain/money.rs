@@ -10,6 +10,15 @@ use std::str::FromStr;
 
 pub const BPS_DENOM: i64 = 10_000;
 
+/// 10^decimals（用于人类单位与链上原始单位的换算）。
+pub fn unit_scale(decimals: u32) -> Decimal {
+    let mut s = Decimal::ONE;
+    for _ in 0..decimals.min(36) {
+        s *= Decimal::from(10);
+    }
+    s
+}
+
 /// 解析十进制字面量，非法输入直接 panic —— 仅用于常量与测试。
 pub fn dec(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap_or_else(|_| panic!("invalid decimal literal: {s}"))

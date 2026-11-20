@@ -212,9 +212,13 @@ impl DemoMarket {
             let px0 = base_prices.get(d.t0).copied().unwrap_or(Decimal::ONE);
             let px1 = base_prices.get(d.t1).copied().unwrap_or(Decimal::ONE);
             let tvl = d.tvl_usd.parse::<Decimal>().unwrap_or(dec("1000000"));
+            // 演示环境把池深度放大 4 倍：模板里是主网单池 TVL 的量级，
+            // 但 250–2,500 USDC 的名义规模要在 20 bps 冲击上限内完成，
+            // 否则所有候选都会卡在 dex_price_impact_max_bps 上，界面看不到可执行机会。
+            let depth = tvl * Decimal::from(40);
             // 储备：使两侧价值各占一半
-            let base0 = tvl / Decimal::from(2) / px0;
-            let base1 = tvl / Decimal::from(2) / px1;
+            let base0 = depth / Decimal::from(2) / px0;
+            let base1 = depth / Decimal::from(2) / px1;
             let (amp, w0, w1) = match d.kind {
                 PoolKind::StableSwap => (dec("120"), dec("0.5"), dec("0.5")),
                 PoolKind::WeightedPool => (Decimal::ZERO, dec("0.5"), dec("0.5")),
@@ -229,6 +233,8 @@ impl DemoMarket {
                     address: d.address.into(),
                     token0: d.t0.into(),
                     token1: d.t1.into(),
+                    decimals0: 0,
+                    decimals1: 0,
                     fee_bps: d.fee_bps,
                     tick_spacing: None,
                     tvl_usd: tvl,
@@ -274,6 +280,7 @@ impl DemoMarket {
                 sym,
                 mid,
                 cfg.cex.book_levels,
+                1,
                 &mut rng,
             ));
             instruments.insert(sym.clone(), inst);
@@ -308,10 +315,12 @@ impl DemoMarket {
             s.factor = 1.0 + (s.factor - 1.0) * 0.85;
             // 常规噪声 ~5bps
             s.factor *= 1.0 + self.rng.range(-0.0005, 0.0005);
-            // 偶发错位：约每 20 个 tick 每个池一次，40–150bps
-            if self.rng.chance(0.05) {
+            // 偶发错位：约每 10 个 tick 每个池一次，90–260bps。
+            // 幅度必须覆盖 250 USDC 名义下的固定成本（Gas + 优先费 + 准备金），
+            // 否则演示环境永远只有「净利为负的拒绝样本」，界面看不到可执行机会。
+            if self.rng.chance(0.10) {
                 let dir = if self.rng.chance(0.5) { 1.0 } else { -1.0 };
-                s.factor *= 1.0 + dir * self.rng.range(0.0040, 0.0150);
+                s.factor *= 1.0 + dir * self.rng.range(0.0140, 0.0360);
             }
             // 限制极端偏离，保持市场可信
             s.factor = s.factor.clamp(0.93, 1.07);
@@ -321,9 +330,9 @@ impl DemoMarket {
         for f in self.cex_factors.values_mut() {
             *f = 1.0 + (*f - 1.0) * 0.8;
             *f *= 1.0 + self.rng.range(-0.0002, 0.0002);
-            if self.rng.chance(0.06) {
+            if self.rng.chance(0.10) {
                 let dir = if self.rng.chance(0.5) { 1.0 } else { -1.0 };
-                *f *= 1.0 + dir * self.rng.range(0.0030, 0.0120);
+                *f *= 1.0 + dir * self.rng.range(0.0100, 0.0240);
             }
             *f = f.clamp(0.93, 1.07);
         }
@@ -388,11 +397,13 @@ impl DemoMarket {
             let quote_px = base_prices.get(&inst.quote).copied().unwrap_or(Decimal::ONE);
             let mid = base_px / quote_px * Decimal::from_f64(f).unwrap_or(Decimal::ONE);
             let levels = 12;
+            let seq = self.tick_count.saturating_mul(10).saturating_add(2);
             self.books.upsert_snapshot(make_book(
                 &inst.exchange,
                 &inst.symbol,
                 mid,
                 levels,
+                seq,
                 &mut self.rng,
             ));
         }
@@ -503,6 +514,7 @@ fn make_book(
     symbol: &str,
     mid: Decimal,
     levels: usize,
+    seq: u64,
     rng: &mut Rng,
 ) -> DomainBook {
     let now = Utc::now();
@@ -530,7 +542,7 @@ fn make_book(
     DomainBook {
         exchange: exchange.to_string(),
         symbol: symbol.to_string(),
-        seq: rng.next_u64() % 1_000_000,
+        seq,
         bids,
         asks,
         exchange_ts: now,

@@ -109,6 +109,15 @@ impl Db {
         })
         .is_ok()
     }
+
+    /// 非阻塞健康检查：连接正被写入占用时直接返回「可用」，
+    /// 避免 /api/system/health 在扫描落库期间排队十几秒。
+    pub fn health_nonblocking(&self) -> bool {
+        match self.conn.try_lock() {
+            Ok(c) => c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0)).is_ok(),
+            Err(_) => true,
+        }
+    }
 }
 
 #[cfg(test)]

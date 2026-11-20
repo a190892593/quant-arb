@@ -171,6 +171,7 @@ fn opportunity(route: DexRoute, qty: Decimal) -> Opportunity {
         data_quality: DataQuality::Verified,
         model_level: ModelLevel::M2,
         confidence: "test".into(),
+        m2: None,
         quote_timestamp: chrono::Utc::now(),
         quote_block_number: 100,
         book_age_ms: 10,

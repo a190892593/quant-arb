@@ -85,6 +85,13 @@ pub struct PoolRef {
     pub address: String,
     pub token0: String,
     pub token1: String,
+    /// token0/token1 精度。V3 的 sqrtPrice/ticks 以原始单位存储，
+    /// 报价时用它把人类单位与原始单位互转；V2/StableSwap/Weighted 的储备
+    /// 已在适配层归一化为人类单位，因此不参与储备计算。
+    #[serde(default)]
+    pub decimals0: u32,
+    #[serde(default)]
+    pub decimals1: u32,
     pub fee_bps: i64,
     pub tick_spacing: Option<i32>,
     pub tvl_usd: Decimal,
@@ -303,6 +310,23 @@ impl Quote {
             invalid_reason: Some(reason.to_string()),
         }
     }
+}
+
+/// M2（REVM 分叉执行）复核证据：在本地区块状态上重放报价，对比 M1 输出。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct M2Evidence {
+    pub passed: bool,
+    pub block: u64,
+    pub amount_in: Decimal,
+    pub m1_out: Decimal,
+    pub m2_out: Decimal,
+    pub diff_bps: Decimal,
+    pub gas_used: u64,
+    /// 逐路线 Gas 来源：revm（整笔回放）/ quoter（Quoter 代估）/ model。
+    #[serde(default)]
+    pub gas_source: String,
+    pub elapsed_ms: u64,
+    pub detail: String,
 }
 
 /// 路线交易腿（TDD §4.2）。

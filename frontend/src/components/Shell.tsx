@@ -121,7 +121,7 @@ export function Rail({ active }: { active: string }) {
                 >
                   <Icon name={item.icon} />
                   <span className="nav-text">{item.label}</span>
-                  {badge !== undefined && <span className="nav-badge">{badge}</span>}
+                  {badge !== undefined && badge > 0 && <span className="nav-badge">{badge}</span>}
                 </a>
               );
             })}

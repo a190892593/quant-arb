@@ -225,7 +225,7 @@
 .mb-8 { margin-bottom: 8px; } .mb-12 { margin-bottom: 12px; }
 
 /* ---------- kpi ---------- */
-.kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr)); gap: 12px; }
 .kpi {
   position: relative; display: flex; flex-direction: column; gap: 5px;
   background: var(--bg-2); border: 1px solid var(--line-1); border-radius: var(--r);
@@ -443,3 +443,16 @@
 @media (max-width: 560px) {
   .kpi-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- search config editable panel ---- */
+.cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.cfg-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+.cfg-field--wide { flex: 1; min-width: 280px; }
+.cfg-field input { height: 30px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 6px; background: transparent; color: var(--ink-1); font: inherit; }
+.cfg-field input:focus { outline: none; border-color: var(--accent); }
+
+/* 五联 KPI：CEX 页五个指标排成一行（窄屏逐级降列，避免挤成豆腐块） */
+.kpi-grid--5 { --kpi-cols: 5; }
+@media (max-width: 1340px) { .kpi-grid--5 { --kpi-cols: 3; grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .kpi-grid--5 { --kpi-cols: 2; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px)  { .kpi-grid--5 { --kpi-cols: 1; grid-template-columns: minmax(0, 1fr); } }

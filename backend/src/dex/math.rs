@@ -650,6 +650,58 @@ fn stable_get_y(x_new: Decimal, x_other: Decimal, d: Decimal, ann: Decimal) -> O
     Some(y)
 }
 
+/// Aerodrome/Velodrome 稳定曲线（固定 x^3*y + y^3*x = k，无 A 参数）。
+pub fn aerodrome_stable_amount_out(
+    amount_in: Decimal,
+    reserve_in: Decimal,
+    reserve_out: Decimal,
+    fee_bps: i64,
+) -> Decimal {
+    if amount_in <= Decimal::ZERO || reserve_in <= Decimal::ZERO || reserve_out <= Decimal::ZERO {
+        return Decimal::ZERO;
+    }
+    let fee = Decimal::from(fee_bps.max(0)) / Decimal::from(10_000);
+    let amount_after = amount_in * (Decimal::ONE - fee);
+    if amount_after <= Decimal::ZERO {
+        return Decimal::ZERO;
+    }
+    let k = |x: Decimal, y: Decimal| -> Decimal {
+        x * x * x * y + y * y * y * x
+    };
+    let d = |x: Decimal, y: Decimal| -> Decimal {
+        x * x * x + Decimal::from(3) * x * y * y
+    };
+    let x0 = reserve_in + amount_after;
+    let xy = k(reserve_in, reserve_out);
+    let mut y = reserve_out;
+    for _ in 0..255 {
+        let kf = k(x0, y);
+        if kf < xy {
+            let mut dy = (xy - kf) / d(x0, y).max(Decimal::new(1, 18));
+            if dy <= Decimal::ZERO {
+                if kf == xy {
+                    return (reserve_out - y).max(Decimal::ZERO);
+                }
+                if k(x0, y + Decimal::ONE) > xy {
+                    return (reserve_out - y - Decimal::ONE).max(Decimal::ZERO);
+                }
+                dy = Decimal::new(1, 18);
+            }
+            y += dy;
+        } else {
+            let mut dy = (kf - xy) / d(x0, y).max(Decimal::new(1, 18));
+            if dy <= Decimal::ZERO {
+                if kf == xy || k(x0, (y - Decimal::new(1, 18)).max(Decimal::ZERO)) < xy {
+                    return (reserve_out - y).max(Decimal::ZERO);
+                }
+                dy = Decimal::new(1, 18);
+            }
+            y = (y - dy).max(Decimal::ZERO);
+        }
+    }
+    (reserve_out - y).max(Decimal::ZERO)
+}
+
 /// StableSwap exact-in 报价（Curve get_y 反解）。
 ///
 /// 手续费从输入侧扣除（`aif = amount_in·(1-fee)`），再以 `x_in + aif` 反解输出侧
@@ -1126,6 +1178,35 @@ mod tests {
         );
         // 手续费本身必须被扣除
         assert!(out < dec("1000"), "手续费必须计入");
+    }
+
+    #[test]
+    fn aerodrome_stable_curve_is_monotonic_and_fee_aware() {
+        let small = aerodrome_stable_amount_out(dec("100"), dec("1000000"), dec("1000000"), 0);
+        let big = aerodrome_stable_amount_out(dec("1000"), dec("1000000"), dec("1000000"), 0);
+        assert!(small > Decimal::ZERO && small < dec("100"));
+        assert!(big > small);
+        let with_fee =
+            aerodrome_stable_amount_out(dec("1000"), dec("1000000"), dec("1000000"), 5);
+        assert!(with_fee < big, "手续费必须降低输出");
+        let imbalanced =
+            aerodrome_stable_amount_out(dec("1000"), dec("1000000"), dec("100000"), 0);
+        assert!(imbalanced < dec("1000"), "不均衡池必须产生滑点");
+    }
+
+    #[test]
+    fn aerodrome_curve_matches_onchain_sample() {
+        // Base Aerodrome WETH/USDC stable 池实测：1 WETH -> 1326.394680 USDC。
+        let out = aerodrome_stable_amount_out(
+            dec("1"),
+            dec("2.135330732377406181"),
+            dec("11041.047951"),
+            5,
+        );
+        assert!(
+            out > dec("1326.39") && out < dec("1326.40"),
+            "曲线应与链上 getAmountOut 一致，实际 {out}"
+        );
     }
 
     #[test]

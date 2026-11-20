@@ -1,0 +1,202 @@
+# Base 链配置档：配合 ARBX_PROFILE=base 叠加到 config/default.toml。
+# 独立实例：端口 8792、数据目录 instances/base/data、UI 复用仓库 ui/。
+
+[server]
+port = 8792
+
+[live]
+chain_id = 8453
+rpc_primary = "https://mainnet.base.org"
+rpc_fallback = "https://base.publicnode.com"
+rpc_pool = ["https://base.publicnode.com"]
+refresh_ms = 2500
+max_pools = 30
+tick_word_radius = 1
+
+[[live.tokens]]
+symbol = "USDC"
+address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+decimals = 6
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "WETH"
+address = "0x4200000000000000000000000000000000000006"
+decimals = 18
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "DAI"
+address = "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb"
+decimals = 18
+allowed_start = false
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "USDbC"
+address = "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA"
+decimals = 6
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "AERO"
+address = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+decimals = 18
+allowed_start = false
+allowed_hop = true
+allowed_flash = false
+status = "APPROVED"
+
+# Uniswap V3 Base 核心池（地址已由 Base 工厂 getPool 校验）
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xd0b53D9277642d899DF5C87A3966A349A798F224"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6c561B446416E1A00E8E93E221854d6eA4171372"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc18F50D6a832F12F6DCaaEEe8D0c87a65B96787E"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "DAI"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x06959273E9A65433De71F5a452D529544e07Ddd0"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "USDbC"
+token1 = "USDC"
+decimals0 = 6
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x3d5D143381916280ff91407FeBEb52f2B60f33Cf"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "AERO"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+
+# Aerodrome 波动池（Velodrome V2 风格，constant product；stable 池未纳入）
+[[live.extra_pools]]
+protocol_id = "aerodrome-volatile"
+address = "0xcdac0d6c6c59727a65f871236188350531885c43"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "aerodrome-volatile"
+address = "0x6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "AERO"
+decimals0 = 6
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "aerodrome-volatile"
+address = "0x7f670f78b17dec44d5ef68a48740b6f8849cc2e6"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "AERO"
+decimals0 = 18
+decimals1 = 18
+
+
+# Aerodrome 稳定池（x^3y+y^3x，feed 读取 getA()）
+[[live.extra_pools]]
+protocol_id = "aerodrome-stable"
+address = "0x3548029694fbb241d45fb24ba0cd9c9d4e745f16"
+kind = "STABLESWAP"
+fee_bps = 5
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "aerodrome-stable"
+address = "0x67b00b46fa4f4f24c03855c5c8013c0b938b3eec"
+kind = "STABLESWAP"
+fee_bps = 5
+token0 = "DAI"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[dex_engine]
+min_pool_tvl_usd = 10000
+max_pools = 30
+base_symbols = ["USDC", "USDbC", "DAI"]
+max_evaluate = 500
+max_evaluate_ms = 1000
+
+[discovery]
+network = "base"
+# Base 自动发现（V3 池；Aerodrome 核心池已显式登记）
+enabled = true
+factory_v3 = "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+factories_v2 = []
+min_tvl_usd = 25000
+max_total_pools = 60
+max_new_pools = 30
+
+[m2]
+enabled = false
+rpc = "https://mainnet.base.org"
+quoter = "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+every_ms = 60000
+
+[[chains]]
+chain_id = 8453
+name = "Base"
+native = "ETH"
+rpc_primary = "https://mainnet.base.org"
+rpc_secondary = "https://base.publicnode.com"
+block_time_ms = 2000
+stage = "PAPER_READY"
+gas_model = "OP Stack L2"

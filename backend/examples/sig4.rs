@@ -1,0 +1,1 @@
+﻿fn main(){let s=arb_backend::evm::abi::selector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"); println!("0x{}",s.iter().map(|b|format!("{b:02x}")).collect::<String>());}

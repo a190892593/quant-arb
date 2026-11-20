@@ -1,0 +1,170 @@
+{
+  "tokens": [
+    {
+      "symbol": "USDC",
+      "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+      "decimals": 6,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "USDT",
+      "address": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+      "decimals": 6,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "WETH",
+      "address": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "WBTC",
+      "address": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
+      "decimals": 8,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "ARB",
+      "address": "0x912CE59144191C1204E64559FE8253a0e49E6548",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "DAI",
+      "address": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "GMX",
+      "address": "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "wstETH",
+      "address": "0x5979D7b546E38E414F7E9822514be443A4800529",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "config"
+    },
+    {
+      "symbol": "LINK",
+      "address": "0xf97f4df75117a78c1a5a0dbb814af92458539fb4",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "auto"
+    },
+    {
+      "symbol": "USDC",
+      "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "decimals": 6,
+      "status": "WHITELIST",
+      "source": "auto"
+    },
+    {
+      "symbol": "USDbC",
+      "address": "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+      "decimals": 6,
+      "status": "WHITELIST",
+      "source": "auto"
+    },
+    {
+      "symbol": "WETH",
+      "address": "0x4200000000000000000000000000000000000006",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "auto"
+    },
+    {
+      "symbol": "AERO",
+      "address": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "auto"
+    },
+    {
+      "symbol": "cbBTC",
+      "address": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+      "decimals": 8,
+      "status": "WHITELIST",
+      "source": "discovered"
+    },
+    {
+      "symbol": "MSTRc",
+      "address": "0xb2000000000000000000004884b426556b92883d",
+      "decimals": 8,
+      "status": "WHITELIST",
+      "source": "discovered"
+    },
+    {
+      "symbol": "SPCXc",
+      "address": "0xb2000000000000000000007b9fcbd005511acbd5",
+      "decimals": 8,
+      "status": "WHITELIST",
+      "source": "discovered"
+    },
+    {
+      "symbol": "ICNT",
+      "address": "0xe0cd4cacddcbf4f36e845407ce53e87717b6601d",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "discovered"
+    },
+    {
+      "symbol": "FLOWER",
+      "address": "0x3e12b9d6a4d12cd9b4a6d613872d0eb32f68b380",
+      "decimals": 18,
+      "status": "WHITELIST",
+      "source": "discovered"
+    }
+  ],
+  "params": {
+    "min_pool_tvl_usd": 25000.0,
+    "max_pool_share_pct": 10.0,
+    "min_input_usd": 100.0,
+    "max_input_usd": 5000.0,
+    "max_pool_state_age_ms": 8000,
+    "min_hops": 2,
+    "max_hops": 5,
+    "max_pools": 56,
+    "max_evaluate": 800,
+    "max_evaluate_ms": 1200,
+    "notional_ladder": [
+      250.0,
+      500.0,
+      1000.0,
+      2500.0,
+      5000.0,
+      7500.0,
+      10000.0
+    ],
+    "base_symbols": [
+      "USDC",
+      "USDT"
+    ],
+    "max_candidates": 100000,
+    "grid_points": 30,
+    "refine_iters": 3,
+    "ttl_sec": 30,
+    "requote_age_ms": 12000,
+    "full_rescan_blocks": 240,
+    "gas_price_gwei": 0.0,
+    "priority_fee_usd": 0.02,
+    "flash_fee_bps": 5.0,
+    "delay_reserve_bps": 2.0,
+    "mev_reserve_bps": 3.0,
+    "profit_discount_pct": 10.0,
+    "model_mismatch_max_bps": 50.0,
+    "stress_adverse_bps": 25.0,
+    "stress_gas_increase_pct": 50.0
+  }
+}

@@ -40,6 +40,249 @@ fn not_found(msg: impl Into<String>) -> ApiError {
 // 系统
 // ------------------------------------------------------------------
 
+pub async fn search_config_get(State(state): State<Arc<AppState>>) -> ApiResult {
+    let cfg = state.search.lock().await.clone();
+    let params = state.dex_params.read().await.clone();
+    Ok(Json(json!({
+        "tokens": cfg.tokens,
+        "whitelist": cfg.whitelist().len(),
+        "blacklist": cfg.blacklist().len(),
+        "params": cfg.params,
+        "effective": {
+            "min_pool_tvl_usd": params.min_pool_tvl_usd,
+            "max_pool_share_pct": params.max_pool_share_pct,
+            "min_input_usd": params.min_input_usd,
+            "max_input_usd": params.max_input_usd,
+            "max_pool_state_age_ms": params.max_pool_state_age_ms,
+            "min_hops": params.min_hops,
+            "max_hops": params.max_hops,
+            "max_pools": params.max_pools,
+            "max_evaluate": params.max_evaluate,
+            "max_evaluate_ms": params.max_evaluate_ms,
+        },
+        "note": "参数即时生效；Token 白/黑名单变更需重启后端重建 feed（自动登记的新 Token 即时生效）",
+    })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SearchConfigUpdate {
+    pub params: Option<crate::search_config::SearchParams>,
+    pub tokens: Option<Vec<crate::search_config::TokenEntry>>,
+}
+
+pub async fn search_config_put(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SearchConfigUpdate>,
+) -> ApiResult {
+    let mut cfg = state.search.lock().await.clone();
+    let tokens_changed = body.tokens.is_some();
+    if let Some(p) = body.params {
+        cfg.params = p;
+    }
+    if let Some(t) = body.tokens {
+        cfg.tokens = t;
+    }
+    let mut errors = Vec::new();
+    for t in &mut cfg.tokens {
+        t.symbol = t.symbol.trim().to_string();
+        t.address = t.address.trim().to_string();
+        if t.symbol.is_empty() {
+            errors.push("Token 符号不能为空".to_string());
+        }
+        if !t.address.is_empty() && crate::evm::abi::parse_address(&t.address).is_err() {
+            errors.push(format!("{} 地址非法: {}", t.symbol, t.address));
+        }
+        if t.status.eq_ignore_ascii_case(crate::search_config::BLACKLIST) {
+            t.status = crate::search_config::BLACKLIST.into();
+        } else {
+            t.status = crate::search_config::WHITELIST.into();
+        }
+        t.decimals = t.decimals.min(36);
+    }
+    if cfg.params.min_input_usd <= 0.0 {
+        errors.push("min_input_usd 必须 > 0".into());
+    }
+    if cfg.params.max_input_usd < cfg.params.min_input_usd {
+        errors.push("max_input_usd 必须 >= min_input_usd".into());
+    }
+    if cfg.params.max_pool_share_pct <= 0.0 || cfg.params.max_pool_share_pct > 100.0 {
+        errors.push("max_pool_share_pct 必须在 (0,100]".into());
+    }
+    if cfg.params.min_hops < 2 || cfg.params.max_hops < cfg.params.min_hops || cfg.params.max_hops > 6 {
+        errors.push("hops 必须满足 2 <= min_hops <= max_hops <= 6".into());
+    }
+    if cfg.params.max_pools == 0 || cfg.params.max_evaluate == 0 {
+        errors.push("max_pools / max_evaluate 必须 > 0".into());
+    }
+    if errors.is_empty() {
+        cfg.save(&state.workspace);
+        let mut params = state.dex_params.read().await.clone();
+        cfg.params.apply(&mut params);
+        *state.dex_params.write().await = params;
+        *state.search.lock().await = cfg.clone();
+        Ok(Json(json!({
+            "ok": true,
+            "tokens": cfg.tokens,
+            "params": cfg.params,
+            "token_reload_required": tokens_changed,
+        })))
+    } else {
+        Err((StatusCode::BAD_REQUEST, Json(json!({"errors": errors}))))
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct TokenUpdate {
+    /// whitelist / blacklist / remove
+    pub action: String,
+    pub symbol: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default = "default_decimals")]
+    pub decimals: u32,
+}
+
+fn default_decimals() -> u32 {
+    18
+}
+
+pub async fn search_tokens_post(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TokenUpdate>,
+) -> ApiResult {
+    let mut cfg = state.search.lock().await.clone();
+    let symbol = body.symbol.trim();
+    if symbol.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "symbol 不能为空"})),
+        ));
+    }
+    let action = body.action.to_ascii_lowercase();
+    match action.as_str() {
+        "remove" | "delete" => {
+            cfg.remove(symbol);
+        }
+        "blacklist" => {
+            cfg.upsert(
+                symbol,
+                body.address.trim(),
+                body.decimals,
+                crate::search_config::BLACKLIST,
+                "manual",
+            );
+        }
+        "whitelist" | "add" => {
+            if body.address.trim().is_empty()
+                || crate::evm::abi::parse_address(body.address.trim()).is_err()
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "加入白名单需要合法的地址"})),
+                ));
+            }
+            cfg.upsert(
+                symbol,
+                body.address.trim(),
+                body.decimals,
+                crate::search_config::WHITELIST,
+                "manual",
+            );
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "action 必须是 whitelist / blacklist / remove"})),
+            ))
+        }
+    }
+    cfg.save(&state.workspace);
+    *state.search.lock().await = cfg.clone();
+    Ok(Json(json!({
+        "ok": true,
+        "tokens": cfg.tokens,
+        "note": "Token 列表变更需重启后端重建 feed 后生效；auto 登记会立即加入本轮",
+    })))
+}
+
+pub async fn sources_preset(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult {
+    let mode = body
+        .get("mode")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !matches!(mode.as_str(), "free" | "boost") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "mode 必须是 free / boost"})),
+        ));
+    }
+    let mut cfg = state.sources.lock().await.clone();
+    let warnings = cfg.apply_preset(&mode);
+    cfg.save(&state.workspace);
+    *state.sources.lock().await = cfg.clone();
+    Ok(Json(json!({
+        "mode": mode,
+        "warnings": warnings,
+        "config": cfg.masked(),
+    })))
+}
+
+pub async fn sources_get(State(state): State<Arc<AppState>>) -> ApiResult {
+    let cfg = state.sources.lock().await.masked();
+    Ok(Json(json!(cfg)))
+}
+
+pub async fn sources_put(
+    State(state): State<Arc<AppState>>,
+    Json(incoming): Json<crate::source_config::SourceConfig>,
+) -> ApiResult {
+    if !matches!(incoming.strategy.as_str(), "round_robin" | "priority" | "random") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "strategy 必须是 round_robin / priority / random"})),
+        ));
+    }
+    let mut cfg = state.sources.lock().await.clone();
+    cfg.strategy = incoming.strategy.clone();
+    cfg.interval_sec = incoming.interval_sec.clamp(60, 86_400);
+    for s in &mut cfg.sources {
+        if let Some(n) = incoming.sources.iter().find(|x| x.id == s.id) {
+            s.enabled = n.enabled;
+            s.priority = n.priority;
+            s.rate_limit_per_min = n.rate_limit_per_min.max(1);
+            if !n.url.trim().is_empty() {
+                s.url = n.url.trim().to_string();
+            }
+        }
+    }
+    cfg.merge_keys(&incoming);
+    cfg.save(&state.workspace);
+    *state.sources.lock().await = cfg.clone();
+    Ok(Json(json!(cfg.masked())))
+}
+
+pub async fn discovery_status(State(state): State<Arc<AppState>>) -> ApiResult {
+    let s = state.discovery.read().await.clone();
+    Ok(Json(json!(s)))
+}
+
+pub async fn discovery_scan(State(state): State<Arc<AppState>>) -> ApiResult {
+    match crate::dex::discovery::scan_once(&state).await {
+        Ok(st) => {
+            *state.discovery.write().await = st.clone();
+            Ok(Json(json!(st)))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e})),
+        )),
+    }
+}
+
 pub async fn system_status(State(state): State<Arc<AppState>>) -> ApiResult {
     let scanner = state.scanner.read().await.clone();
     let stats = state.stats.read().await;
@@ -65,6 +308,14 @@ pub async fn system_status(State(state): State<Arc<AppState>>) -> ApiResult {
             "last_error": stats.last_error,
         },
         "live_trading_enabled": false,
+        "simulation": {
+            "revm": true,
+            "m2_available": crate::domain::types::M2_AVAILABLE,
+            "max_model": "M2",
+            "stress_model": "M3",
+            "verified_reserved_for": "M2",
+            "note": "已接入 REVM：M2 在报价区块的链上状态上重放 QuoterV2，通过后机会标记 VERIFIED"
+        },
         "note": "第一阶段：不广播链上交易，不提交真实 CEX 订单"
     })))
 }
@@ -221,6 +472,7 @@ pub async fn dex_pools(State(state): State<Arc<AppState>>) -> ApiResult {
                 "execution_allowed": p.pool.execution_allowed,
                 "reserve0": p.state.reserve0,
                 "reserve1": p.state.reserve1,
+                "ticks_loaded": p.state.ticks.len(),
                 "block_number": p.state.block_number,
                 "age_ms": p.state.age_ms(now),
                 "spot_price": p.spot_price(&p.pool.token0),
@@ -1130,6 +1382,17 @@ pub async fn dex_routes(
         .collect();
     list.sort_by(|a, b| b.net_usd.cmp(&a.net_usd));
     list.truncate(q.limit.unwrap_or(100));
+    // 列表接口剥掉重字段：每条约 30 个优化网格点，500 条会让响应到 10MB 级别，
+    // 前端拿它只做表格展示（曲线走详情接口）。
+    let list = list
+        .into_iter()
+        .map(|mut r| {
+            if let Some(opt) = r.optimization.as_mut() {
+                opt.points.clear();
+            }
+            r
+        })
+        .collect::<Vec<_>>();
     let graph = state.dex_graph.read().await.clone();
     let stats = state.dex_scan_stats.read().await.clone();
     Ok(Json(json!({
@@ -1179,8 +1442,8 @@ pub async fn dex_graph(State(state): State<Arc<AppState>>) -> ApiResult {
     })))
 }
 
-fn dex_engine_json(state: &Arc<AppState>) -> Value {
-    let p = &state.dex_params;
+async fn dex_engine_json(state: &Arc<AppState>) -> Value {
+    let p = state.dex_params.read().await.clone();
     json!({
         "gas": {
             "executor_base": p.gas.executor_base,
@@ -1221,7 +1484,7 @@ fn dex_engine_json(state: &Arc<AppState>) -> Value {
         "full_rescan_blocks": p.full_rescan_blocks,
         "base_symbols": p.base_symbols,
         "notional_ladder": p.notional_ladder,
-        "model_note": "本机未接入 REVM：M2 不可用，最高模拟等级为 M1 + M3；VERIFIED 仅保留给 M2。",
+        "model_note": "已接入 REVM：M2 在报价区块状态上重放 QuoterV2 复核，通过后标记 VERIFIED；M1+M3 为常规扫描等级。",
     })
 }
 
@@ -1231,7 +1494,7 @@ pub async fn scanner_engine(State(state): State<Arc<AppState>>) -> ApiResult {
     let graph = state.dex_graph.read().await.clone();
     let cache = state.dex_cache.lock().await;
     Ok(Json(json!({
-        "params": dex_engine_json(&state),
+        "params": dex_engine_json(&state).await,
         "scan": stats,
         "graph": graph,
         "cache": {
@@ -1255,7 +1518,7 @@ pub async fn scanner_config(State(state): State<Arc<AppState>>) -> ApiResult {
             "start_equity": state.config.paper.start_equity,
             "dex_share": state.config.paper.dex_share,
         },
-        "dex_engine": dex_engine_json(&state),
+        "dex_engine": dex_engine_json(&state).await,
         "feed": {
             "mode": state.config.feed.mode,
             "seed": state.config.feed.seed,
@@ -1326,7 +1589,7 @@ pub async fn create_simulation(
 
     let level = req.level.unwrap_or_else(|| "M3".into()).to_uppercase();
     let market = state.market.read().await;
-    let params = &state.dex_params;
+    let params = state.dex_params.read().await.clone();
     let price = market
         .prices
         .get(&record.start_token)

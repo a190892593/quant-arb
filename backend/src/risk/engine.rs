@@ -8,6 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::domain::market::{RiskDecision, RiskViolation};
 use crate::domain::risk::{violation, ParamContext, ParamOverride, RiskInput, RiskParam};
@@ -372,22 +373,36 @@ impl RiskEngine {
         }
 
         // 5. 净利润门槛：不使用理论毛利润。
+        // 分层：净利润 ≤ 0 → HARD STOP；0 < 净利润 < 执行门槛 → WARNING（观察，近失）。
         let floor = self.min_profit_for(input.strategy, input.target_notional);
         if input.net_profit_usd < floor {
+            let positive = input.net_profit_usd > Decimal::ZERO;
             record(
                 &mut decision,
                 violation(
                     "min_profit",
-                    "最低净利润",
-                    RiskSeverity::HardStop,
+                    if positive {
+                        "低于执行门槛（观察）"
+                    } else {
+                        "最低净利润"
+                    },
+                    if positive {
+                        RiskSeverity::Warning
+                    } else {
+                        RiskSeverity::HardStop
+                    },
                     floor,
                     input.net_profit_usd,
                     "USDC",
                     &format!(
-                        "{} 保守净利润 {} USDC 低于最低门槛 {} USDC",
+                        "{} 保守净利润 {} USDC 低于执行门槛 {} USDC（缺口 {:.2} bps）",
                         input.strategy.label(),
                         input.net_profit_usd,
-                        floor
+                        floor,
+                        ((floor - input.net_profit_usd) / input.target_notional.max(Decimal::ONE)
+                            * Decimal::from(10_000))
+                        .to_f64()
+                        .unwrap_or(0.0)
                     ),
                 ),
             );
@@ -795,19 +810,19 @@ mod tests {
         let e = engine();
         assert_eq!(
             e.min_profit_for(StrategyType::DexTriple, dec("1000")),
-            dec("2")
+            dec("0.001")
         );
         assert_eq!(
             e.min_profit_for(StrategyType::CexDex, dec("1000")),
-            dec("5")
+            dec("0.001")
         );
         assert_eq!(
             e.min_profit_for(StrategyType::DexTriple, dec("100000")),
-            dec("100")
+            dec("0.1")
         );
         assert_eq!(
             e.min_profit_for(StrategyType::CexDex, dec("100000")),
-            dec("300")
+            dec("0.1")
         );
     }
 
@@ -839,7 +854,8 @@ mod tests {
         assert_rejected(&i, "dex_quote_block_diff_max");
 
         let mut i = dex_input();
-        i.quote_age_ms = 4000;
+        // 公共 RPC + M1 轮询把预算放宽到 8s（见 risk/catalog.rs 注释）
+        i.quote_age_ms = 9000;
         assert_rejected(&i, "dex_quote_max_age_ms");
     }
 
@@ -850,7 +866,7 @@ mod tests {
         assert_rejected(&i, "book_valid");
 
         let mut i = cex_dex_input();
-        i.book_age_ms = Some(300);
+        i.book_age_ms = Some(9000);
         assert_rejected(&i, "book_max_age_ms");
 
         let mut i = cex_dex_input();
@@ -868,13 +884,32 @@ mod tests {
 
     #[test]
     fn profit_gate_rejects() {
+        // 净利 ≤ 0：硬拒绝。
         let mut i = dex_input();
-        i.net_profit_usd = dec("1");
+        i.net_profit_usd = dec("-1");
         assert_rejected(&i, "min_profit");
 
         let mut i = cex_dex_input();
-        i.net_profit_usd = dec("1");
+        i.net_profit_usd = dec("-1");
         assert_rejected(&i, "min_profit");
+    }
+
+    #[test]
+    fn positive_below_floor_is_watch_only() {
+        // 净利 > 0 但低于执行门槛：只告警，不硬拒绝（供观察/近失统计）。
+        let mut i = dex_input();
+        i.net_profit_usd = dec("0.0001");
+        let d = eval(&i);
+        assert!(d.allowed, "正净利应放行到观察层");
+        assert!(d
+            .warnings
+            .iter()
+            .any(|v| v.key == "min_profit" && v.severity == RiskSeverity::Warning));
+
+        let mut i = cex_dex_input();
+        i.net_profit_usd = dec("0.0001");
+        let d = eval(&i);
+        assert!(d.allowed);
     }
 
     #[test]
@@ -1022,9 +1057,9 @@ mod tests {
         assert!(err.contains("覆盖不得放宽硬限制"), "err={err}");
         assert!(e.overrides().is_empty());
 
-        // 下限型：10 -> 5 放宽，必须拒绝
+        // 下限型：0.01 -> 0.001 放宽，必须拒绝
         let err = e
-            .set_override(ov("dex_min_profit_bps", RiskScope::Global, "GLOBAL", "5"))
+            .set_override(ov("dex_min_profit_bps", RiskScope::Global, "GLOBAL", "0.001"))
             .unwrap_err();
         assert!(err.contains("覆盖不得放宽硬限制"), "err={err}");
     }
@@ -1068,7 +1103,7 @@ mod tests {
             strategy_id: Some("dex_cross".into()),
             ..Default::default()
         };
-        assert_eq!(e.effective("dex_min_profit_usd", &ctx_other), dec("2"));
+        assert_eq!(e.effective("dex_min_profit_usd", &ctx_other), dec("0"));
     }
 
     #[test]

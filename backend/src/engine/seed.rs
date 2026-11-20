@@ -81,9 +81,14 @@ pub async fn sync_prices(state: &Arc<AppState>) {
 ///
 /// 这一步是「期初资金分配」，不是套利利润；每笔划转都有独立流水与来源说明。
 pub async fn seed_inventory(state: &Arc<AppState>) -> anyhow::Result<()> {
-    let (weth_price, eth_price) = {
+    let (weth_price, eth_price, wbtc_price, btc_price) = {
         let m = state.market.read().await;
-        (m.price("WETH"), m.price("ETH"))
+        (
+            m.price("WETH"),
+            m.price("ETH"),
+            m.price("WBTC"),
+            m.price("BTC"),
+        )
     };
     if weth_price.is_zero() {
         return Ok(());
@@ -109,6 +114,10 @@ pub async fn seed_inventory(state: &Arc<AppState>) -> anyhow::Result<()> {
     let cex_spot_usdt = ledger.ensure_account("cex-binance", VenueKind::Cex, "USDT", AccountKind::CexSpot);
     let cex_spot_usdc = ledger.ensure_account("cex-binance", VenueKind::Cex, "USDC", AccountKind::CexSpot);
     let cex_spot_eth = ledger.ensure_account("cex-binance", VenueKind::Cex, "ETH", AccountKind::CexSpot);
+    let dex_wallet_wbtc = ledger.ensure_account("dex-arb", VenueKind::Dex, "WBTC", AccountKind::DexWallet);
+    let cex_spot_btc = ledger.ensure_account("cex-binance", VenueKind::Cex, "BTC", AccountKind::CexSpot);
+    let usdc_id = dex_wallet_usdc.clone();
+    let cex_usdt_id = cex_spot_usdt.clone();
 
     let entry = |account: String, asset: &str, amount: Decimal, price: Decimal, memo: &str| PostRequest {
         account_id: account,
@@ -124,7 +133,7 @@ pub async fn seed_inventory(state: &Arc<AppState>) -> anyhow::Result<()> {
         memo: memo.to_string(),
     };
 
-    let batch = vec![
+    let mut batch = vec![
         // DEX：USDC → USDT（稳定币等值划转，保持总权益不变）
         entry(dex_wallet_usdc.clone(), "USDC", -dex_usdc, Decimal::ONE, "期初：DEX 钱包配置 USDT 库存"),
         entry(dex_wallet_usdt, "USDT", dex_usdc, Decimal::ONE, "期初：DEX 钱包收到 USDT"),
@@ -138,6 +147,40 @@ pub async fn seed_inventory(state: &Arc<AppState>) -> anyhow::Result<()> {
         entry(cex_spot_usdt, "USDT", -eth_cost, Decimal::ONE, "期初：CEX 现货买入 ETH"),
         entry(cex_spot_eth, "ETH", eth_qty, eth_price.max(weth_price), "期初：CEX 现货持有 ETH"),
     ];
+    // 期初同时配置 BTC 两侧库存，使 CEX–DEX 双向都有可执行样本（Paper）。
+    let btc_qty = Decimal::new(2, 2); // 0.02 BTC
+    if wbtc_price > Decimal::ZERO {
+        batch.push(entry(
+            usdc_id.clone(),
+            "USDC",
+            -(btc_qty * wbtc_price),
+            Decimal::ONE,
+            "期初：DEX 钱包买入 WBTC",
+        ));
+        batch.push(entry(
+            dex_wallet_wbtc,
+            "WBTC",
+            btc_qty,
+            wbtc_price,
+            "期初：DEX 钱包持有 WBTC",
+        ));
+    }
+    if btc_price > Decimal::ZERO {
+        batch.push(entry(
+            cex_usdt_id.clone(),
+            "USDT",
+            -(btc_qty * btc_price),
+            Decimal::ONE,
+            "期初：CEX 现货买入 BTC",
+        ));
+        batch.push(entry(
+            cex_spot_btc,
+            "BTC",
+            btc_qty,
+            btc_price,
+            "期初：CEX 现货持有 BTC",
+        ));
+    }
 
     match ledger.post_batch(batch) {
         Ok(entries) => {

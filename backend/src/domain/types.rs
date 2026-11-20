@@ -124,7 +124,28 @@ impl DataQuality {
             DataQuality::Invalid => 4,
         }
     }
+
+    /// 由状态年龄推导质量，**最高只到 High(B)**。
+    ///
+    /// 本机未接入 REVM，M2 不可用；`Verified(A)` 仅保留给 M2 级别的验证结果，
+    /// 因此 M1 实时行情永远不会产出 A。
+    pub fn from_age(age_ms: i64, max_age_ms: i64) -> DataQuality {
+        if max_age_ms <= 0 || age_ms > max_age_ms {
+            return DataQuality::Invalid;
+        }
+        // 轮询行情下“新鲜”按半个预算计，避免 2–4s 的正常延迟被判为不可执行。
+        if age_ms * 2 > max_age_ms {
+            return DataQuality::Low;
+        }
+        if age_ms * 4 > max_age_ms * 3 {
+            return DataQuality::Medium;
+        }
+        DataQuality::High
+    }
 }
+
+/// 本机是否具备 M2（REVM 状态插入模拟）。已接入 REVM，固定为 true。
+pub const M2_AVAILABLE: bool = true;
 
 str_enum! {
     /// 链准入等级（TDD §3.1）。只能逐级前进，且有验证记录。

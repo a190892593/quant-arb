@@ -18,9 +18,14 @@ export const NAV: NavGroup[] = [
     label: "监控 MONITOR",
     items: [
       { id: "overview", label: "总览", icon: "overview", hash: "#/overview" },
-      { id: "scannerDex", label: "DEX 原子扫描", icon: "scanner", hash: "#/scanner-dex" },
-      { id: "scannerCex", label: "CEX–DEX 扫描", icon: "hedge", hash: "#/scanner-cex" },
-      { id: "routes", label: "路由搜索中心", icon: "route", hash: "#/routes" },
+    ],
+  },
+  {
+    label: "搜索 SEARCH",
+    items: [
+      { id: "scannerDex", label: "DEX–DEX 搜索引擎", icon: "scanner", hash: "#/scanner-dex" },
+      { id: "scannerCex", label: "CEX–DEX 搜索引擎", icon: "hedge", hash: "#/scanner-cex" },
+      { id: "sources", label: "搜索数据源配置", icon: "system", hash: "#/sources" },
     ],
   },
   {

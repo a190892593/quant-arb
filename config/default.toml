@@ -1,11 +1,8 @@
-# ARBX 本地运行配置（第一阶段：Paper Trading，无真实下单/广播）
-#
-# 修改后重启 `arb-backend` 生效。所有金额单位 USDC，费率单位 bps（万分之一）。
-# 本文件不包含任何密钥；第一阶段不需要 CEX 下单 API Key。
-
+# ARBX 本地运行配置（真实链只读扫描 + Paper 账本；无真实下单/广播/签名?#
+# 修改后重?`arb-backend` 生效。所有金额单?USDC，费率单?bps（万分之一）?# 本文件不包含任何密钥；第一阶段不需?CEX 下单 API Key
 [server]
 host = "127.0.0.1"
-# 8787 已被本机其他服务占用，默认改用 8791；可用 ARBX_PORT 覆盖
+# 8787 已被本机其他服务占用，默认改?8791；可?ARBX_PORT 覆盖
 port = 8791
 ui_dir = "ui"
 cors = true
@@ -17,74 +14,78 @@ keep_opportunities = 2000
 keep_risk_events = 5000
 
 [paper]
-# 审计资金基准 5,000 USDC（风控 §3）
+# 审计资金基准 5,000 USDC（风?§3
 start_equity = 5000.0
-# DEX / CEX 资金分配：50:50 只是对比基准，不是最优结论（PRD §2.1）
+# DEX / CEX 资金分配?0:50 只是对比基准，不是最优结论（PRD §2.1
 dex_share = 0.5
 # 扫描周期
 scan_interval_ms = 1500
-# 机会有效期上限 30 秒（风控 §5）
+# 机会有效期上?30 秒（风控 §5
 opportunity_ttl_sec = 30
-# 是否自动执行机会；关闭后只能通过 API 手工触发
-auto_execute = true
+# 真实链阶段不自动“执行”：Paper 执行使用实时行情，但不应被误读为真实成交
+auto_execute = false
 # 每轮扫描命中可执行机会后的执行概率（避免每轮都成交）
 execute_probability = 0.5
-# 研究规模档位（PRD §2.1：250–10,000 USDC 分档测试）
-notional_ladder = [250.0, 500.0, 1000.0, 2500.0]
+# 研究规模档位（PRD §2.1?50?0,000 USDC 分档测试
+notional_ladder = [250.0, 500.0, 1000.0, 2500.0, 5000.0, 7500.0, 10000.0]
 max_inflight = 3
 
 [feed]
-# demo：本地合成市场（离线、可复现）；live：预留给实时公共行情适配器
-mode = "demo"
+# 运行时只接受 live（真实链 RPC）。demo 仅供单元测试直接构造市场，服务不会启用
+mode = "live"
 seed = 20261119
+# 真实链刷新周期（毫秒），实际?[live] refresh_ms 为准
 tick_ms = 1000
 
 [cex]
 exchange = "binance"
-symbols = ["ETHUSDT", "BTCUSDT"]
-# 现货 taker/maker 费率（配置声明值）。fee_confirmed=false 时风控会拒绝生成可执行机会。
-taker_bps = 10.0
+symbols = ["ETHUSDT", "BTCUSDT", "ETHUSDC", "BTCUSDC", "GMXUSDT"]
+# 现货 taker/maker 费率（配置声明值）。fee_confirmed=false 时风控会拒绝生成可执行机会
+taker_bps = 7.5
 maker_bps = 8.0
 fee_confirmed = true
 book_levels = 12
 
 [dex]
-# Gas 价格按链单独校准；此处为 Arbitrum 量级
+# 以下?RPC 不可用时的兜底占位；运行时会被链?eth_gasPrice ?WETH 价格覆盖
 gas_price_gwei = 0.02
 native_price_usd = 2800.0
 gas_per_hop = 130000
-# 闪电贷费用必须来自实际协议数据；演示模式使用显式配置值
+# 闪电贷费用必须来自实际协议数据；演示模式使用显式配置
 flash_loan_fee_bps = 5.0
 flash_provider = "aave-v3"
 
-# DEX 多池多跳扫描引擎（PRD §4–§7）。关闭 enabled 时回退旧版三角/跨池扫描。
+# DEX 多池多跳扫描引擎（PRD §4–?）。关?enabled 时回退旧版三角/跨池扫描
 [dex_engine]
 enabled = true
 min_hops = 2
 max_hops = 5
-max_pools = 5
-# 候选路线 / 访问量 / 单次搜索时间预算（PRD §4.4）
+max_pools = 30
+# 候选路?/ 访问?/ 单次搜索时间预算（PRD §4.4
 max_candidates = 100000
+# 单轮完整定价的候选上限与硬预算（防止上万条路线拖垮 1.5s 扫描周期）
+max_evaluate = 800
+max_evaluate_ms = 1200
 max_visits = 200000
 max_elapsed_ms = 250
-# 投入金额范围与优化分辨率（PRD §5.4）
-min_input_usd = 50.0
-max_input_usd = 25000.0
+# 投入金额范围与优化分辨率（PRD §5.4
+min_input_usd = 100.0
+max_input_usd = 5000.0
 grid_points = 14
 refine_iters = 16
-# 池准入与容量（PRD §8）
-min_pool_tvl_usd = 100000.0
-max_pool_state_age_ms = 3000
+# 池准入与容量（PRD §8
+min_pool_tvl_usd = 25000.0
+max_pool_state_age_ms = 8000
 max_pool_share_pct = 10.0
-# M3 压力模拟（PRD §6.1）
+# M3 压力模拟（PRD §6.1
 stress_bps = 25.0
 stress_gas_pct = 50.0
 stress_flash_pct = 50.0
 model_mismatch_max_bps = 50.0
-# 增量扫描（PRD §9.2）
-requote_age_ms = 800
-full_rescan_blocks = 30
-# Gas 估算分项（PRD §5.6）
+# 增量扫描（PRD §9.2
+requote_age_ms = 4000
+full_rescan_blocks = 240
+# Gas 估算分项（PRD §5.6
 gas_executor_base = 45000
 gas_executor_per_hop = 12000
 gas_transfer_per_hop = 30000
@@ -92,33 +93,1763 @@ gas_flash_loan = 90000
 gas_approve = 50000
 base_symbols = ["USDC", "USDT"]
 
-# 链注册表（第一阶段按数据可得性逐批准入）
-[[chains]]
+# 真实链行情（RPC）。只允许 live；demo 仅供单元测试构造
+[live]
+# Real-chain feed (Arbitrum mainnet). Public RPC: ~1-2s per call.
 chain_id = 42161
-name = "Arbitrum"
-native = "ETH"
 rpc_primary = "https://arb1.arbitrum.io/rpc"
-rpc_secondary = "https://arbitrum.llamarpc.com"
-block_time_ms = 260
-stage = "PAPER_READY"
-gas_model = "L2 单向计费"
+rpc_fallback = "https://arbitrum-one.publicnode.com"
+# 免费 RPC 池：失败自动切换，全部无需 Key
+rpc_pool = ["https://arbitrum-one.publicnode.com"]
+refresh_ms = 2000
+max_pools = 30
+# No REVM / M2: do not scan V3 tick bitmaps; quote single active range (M1).
+tick_word_radius = 0
+max_ticks_per_pool = 64
+tick_top_pools = 3
+tick_refresh_ms = 60000
 
-[[chains]]
-chain_id = 8453
-name = "Base"
-native = "ETH"
-rpc_primary = "https://mainnet.base.org"
-rpc_secondary = "https://base.llamarpc.com"
-block_time_ms = 2000
-stage = "PAPER_READY"
-gas_model = "OP Stack L2 计费"
+[[live.tokens]]
+symbol = "USDC"
+address = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+decimals = 6
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
 
-[[chains]]
-chain_id = 1
-name = "Ethereum"
-native = "ETH"
-rpc_primary = "https://cloudflare-eth.com"
-rpc_secondary = "https://ethereum-rpc.publicnode.com"
-block_time_ms = 12000
-stage = "DATA_VALIDATED"
-gas_model = "EIP-1559 base + priority"
+[[live.tokens]]
+symbol = "USDT"
+address = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+decimals = 6
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "WETH"
+address = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+decimals = 18
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "WBTC"
+address = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+decimals = 8
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "ARB"
+address = "0x912CE59144191C1204E64559FE8253a0e49E6548"
+decimals = 18
+allowed_start = true
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "DAI"
+address = "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+decimals = 18
+allowed_start = false
+allowed_hop = true
+allowed_flash = true
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "GMX"
+address = "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
+decimals = 18
+allowed_start = false
+allowed_hop = true
+allowed_flash = false
+status = "APPROVED"
+
+[[live.tokens]]
+symbol = "wstETH"
+address = "0x5979D7b546E38E414F7E9822514be443A4800529"
+decimals = 18
+allowed_start = false
+allowed_hop = true
+allowed_flash = false
+status = "APPROVED"
+
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x468b88941e7cc0b88c1869d68ab6b570bcef62ff"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "LINK"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x54b26faf3671677c19f70c4b879a6f7b898f732c"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x97b192198d164c2a1834295e302b713bc32c8f1d"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x96059759c6492fb4e8a9777b65f307f2c811a34f"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0xa6c5c7d189fa4eb5af8ba34e63dcdd3a635d433f"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x9fa7314525d5c706213468220c7c9820cfe629cb"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0xdc2167f4a5dec5401eceff1cb55c3573a13f24bd"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x5201f6482eea49c90fe609ed9d8f69328bac8dda"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x935763d7c14925690b89b14d738ecd8bf37db39a"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0xad94d6fbfdfc29dee39417a822994d53a4f287e9"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x138c115bdcc8709d7f782ecc29dfb3829907d74b"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0xa635415f18cda471f5384465a9bc2097755e137f"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x669930dcb297575cda5663a55581d0a331b3783c"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x12999d79055435b10e20c2db079e445d187253f3"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x1001538ad2b88de5b4c1ccc18a741b5b859b895a"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "GMX"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0xda7b0411c753c068cbbe87059bcae2446358f9ed"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "DAI"
+decimals0 = 8
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0xf60d56b5382337dec47ed5c7053b8fee629a54b5"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "camelot-v2"
+address = "0x7ee0421fe48bb2c299edd89761d0ed5b62f1664d"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x57b85fef094e10b5eecdf350af688299e9553378"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xcb0e5bfa72bbb4d16ab5aa0c60601c438f04b4ad"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x515e252b2b5c22b4b2b6df66c2ebeea871aa4d69"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xbf6cbb1f40a542af50839cad01b0dc1747f11e18"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x692a0b300366d1042679397e40f3d2cb4b8f7d30"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x05c6f695ad50c16299bedca3fe9059b56550082f"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xb0d62768e2fb9bd437a51b993b77b93ac9f249d5"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x8cebfb915f7aa8474abcf0fff11d869a256eb887"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x75e5b52dc1785e3d99c41d8136b12118b13c63ae"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x1f42712540f04478ea8fbb5a27d850a1cb1884f6"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x712508685c7f4ac3de31427222269e872c72eb65"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x7d18dc74e51c5d0ba206dde99e93cd6ed6b1e9e7"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "GMX"
+decimals0 = 6
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xbdee369abf5c3dfff5dc65841e939747ba706a5d"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDT"
+decimals0 = 8
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x67bf6fb81996f1968005be5e40b5a60324930a9f"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xfbcbbbb551a5fc5ad7796ab6bbff01fb0dd2e180"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x1be628aeafd210290c261c2b979624b17ebf8750"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "GMX"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xfb3acac8019ca501bfdbd3308537dfe763f2756c"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x91f0f14370c83bc108cc03cf35cd0b9ccea4b1a5"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "ARB"
+decimals0 = 8
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x5933402ef279a609a4287e4e88a4cf0d31a413ad"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "DAI"
+decimals0 = 8
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0x3abc85dff360cf56ad5348227a898bcaba0ee2cb"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "sushi-v2"
+address = "0xd7392d75a40563da47e1df529f8aea2d961c2d55"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0xf64dfe17c8b87f012fcf50fbda1d62bfa148366a"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0xd04bc65744306a5c149414dd3cd5c984d9d3470d"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x8c1d83a25ee2da1643a5d937562682b1ac6c856b"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x103b03051bf073c44decfaf8dfd12275254ab97e"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x8dca5a5dba32ca529594d43f86ed4210ead2ed83"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0xf41aa1688850c806dd0785b4ff230c22d0675ff8"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0xc8eb52b1ce355e5d6dca0153cd01cf16bca3dc55"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0xdeae1ff5282d83aadd42f85c57f6e69a037bf7cd"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x599bb1269b71625da7761ba79a228230c8354c55"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x011f31d20c8778c8beb1093b73e3a5690ee6271b"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x8edd9aeabdf2e63f76f4c4b7f36aefa14d3cc6bc"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x99bbd1c6a48a731d3e73168054df1251c229c71b"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "USDC"
+token1 = "GMX"
+decimals0 = 6
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x637891b5660a60023c24ff6e8fa982560e4afdb8"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0xb9727dc6369e4a43dd7b124c3da547900a2b1837"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDT"
+decimals0 = 8
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x53d461d05fd85499a9c2b1fdfb8a12be496c0265"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x3da7fe3f0ed5c8e82a6e5b046c635274912a5db0"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v2"
+address = "0x8f5384b372a9348c879eaf29d384f33c8f2191f5"
+kind = "UNISWAP_V2"
+fee_bps = 30
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6f38e884725a116c9c7fbf208e79fe8828a2595f"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc6962004f452be9203591991d15f6b388e09e8d0"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc473e2aee3441bf9240be85eb122abb059a3b57c"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x42fc852a750ba93d5bf772ecdc857e87a86403a9"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x42161084d0672e1d3f26a9b53e653be2084ff19c"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x641c00a822e8b671738d32a431a4fb6074e5c79d"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc82819f72a9e77e2c0c3a69b3196478f44303cf4"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x58039203442c9f2a45d5536bd021a383c7f3035c"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x03a3be7ab4aa263d42d63b6cc594f4fb3d3f3951"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x2f5e87c9312fa29aed5c179e456625d79015299c"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x149e36e72726e0bcea5c59d40df2c43f60f5a22d"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x99dfc0126ed31e0169fc32db6b89adf9fee9a77e"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WBTC"
+token1 = "WETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x89a4026e9ade251c67b7fb38054931a39936d9c5"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc6f780497a95e246eb9449f5e4770916dcd6396a"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x92c63d0e701caae670c9415d91c474f686298f00"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x92fd143a8fa0c84e016c2765648b9733b0aa519e"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x0779450b087a86c40e074ac00a65eabe1cbc0f87"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x31fa55e03bad93c7f8affdd2ec616ebfde246001"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xa961f0473da4864c5ed28e00fcc53a3aab056c1b"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x2e630136c42bc72f1285743347ba77a75077aff4"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x5e609d174eedb5ccb42d290a3ba37b56c4cfcb41"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xb435ebfe0bf4ce66810aa4d44e3a5ca875d40db1"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x1aeedd3727a6431b8f070c0afaa81cc74f273882"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x80a9ae39310abf666a87c743d6ebbd0e8c42158e"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WETH"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x35218a1cbac5bbc3e57fd9bd38219d37571b3537"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xb93f8a075509e71325c1c2fc8fa6a75f2d536a13"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x7103b8f34473c7812818c55eb127d1f590f67d84"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x62bc45b7ea9b854facce545a267295d8eb4a58f7"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "wstETH"
+token1 = "WETH"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xbe3ad6a5669dc0b8b12febc03608860c31e2eef6"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xbce73c2e5a623054b0e8e2428e956f4b9d0412a5"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x9957ab69651efe39b17c778e1435258f6a2cd314"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xd7e7ad63359e2aa9e841f6e1326fb7e69479a50b"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "USDC"
+token1 = "USDT"
+decimals0 = 6
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xbd65e976bd6b0b59232144c7966e1065024b874c"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x0e4831319a50228b9e450861297ab92dee15b44f"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6985cb98ce393fce8d6272127f39013f61e36166"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x719826896832c9deaa868272f2dd55cf1e5ca3e7"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WBTC"
+token1 = "USDC"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x616a2a065bfe53da48e83e7d709fb428aa3c9f5b"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xb0f6ca40411360c03d41c5ffc5f179b8403cdcf8"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xaebdca1bc8d89177ebe2308d62af5e74885dccc3"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xac9a19e85a49bacc28bd2deecab3cdfadbfc3e00"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "ARB"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x7cf803e8d82a50504180f417b8bc7a493c0a0503"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x9264e764e6d5d252a5c17c457c9bb059b8831bb1"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xd46c8a1940113ae64f960b7aa12ef5dcab0ffe0e"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xbff936a43e6fe6f891789be66043bcc8effee938"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "USDC"
+token1 = "DAI"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xaed1f217178a463743d23faa6569ec8f2b3f78a4"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "USDC"
+token1 = "GMX"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xb0f4df6389d6a8cd3cc66e8b185a95f3a504af70"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "USDC"
+token1 = "GMX"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x135e49cc315fed87f989e072ee11132686cf84f3"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "USDC"
+token1 = "GMX"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x0a36952fb8c8dc6daefb2fadb07c5212f560880e"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "USDC"
+token1 = "GMX"
+decimals0 = 6
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x4c1fe148ff9bd6c936fa47ee518cc33829d918f7"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "wstETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xab007665a4dfd24830f0ca19206f9fbd7c3aa85f"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "wstETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x7092e723285fe1381a3a59c0d438f53d2c26d9e8"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xd0c0d111d1c53b206a15fd8b53f6697b9ec432df"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "wstETH"
+token1 = "USDC"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x11dd0cb2b2e8f6b8fb786fb4180d13877e2f31f3"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WBTC"
+token1 = "USDT"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x5969efdde3cf5c0d9a88ae51e47d721096a97203"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "USDT"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x53c6ca2597711ca7a73b6921faf4031eedf71339"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "USDT"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x67d3e181e6dcc47f977c3a4b33ac65454b87b997"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WBTC"
+token1 = "USDT"
+decimals0 = 8
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xdb9f3540955b3c5df246dba83b96727fcb3424a1"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xb791ad21ba45c76629003b4a2f04c0d544406e37"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x97bca422ec0ee4851f2110ea743c1cd0a14835a1"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x80151aae63b24a7e1837fe578fb6be026ae8abba"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "ARB"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x7f580f8a02b759c350e6b8340e7c2d4b8162b6a9"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6387b0d5853184645cc9a77d6db133355d2eb4e4"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6d78117425e49562eda06aa1db5f0dcf78c2e56f"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x742e6ca176067f57b79be9f42e0df7cb94521e16"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "DAI"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x5054383d775b13e89bc485c690d537fcb437a449"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "GMX"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x9e91dd7e538a7424841902a14fbe42ebf99e9a7e"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "GMX"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc26064c6768215cd1c54b17a5525387a36176173"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "GMX"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x90ac0bdbe01ff0e0699c1c9e9a089493d8a349b3"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "wstETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x83f1f0913f1352d052be6ceea4f4913ddf52a28a"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x8a32014d7897d907eff5234283ab5f90254ad82b"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "wstETH"
+token1 = "USDT"
+decimals0 = 18
+decimals1 = 6
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x214fb3fef13e49b01abd4504c23defb735168341"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WBTC"
+token1 = "ARB"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x0b040426b92c405d39c31263f1f98680e84cb699"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "ARB"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x689c96ceab93f5e131631d225d75dea3fd37747e"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "ARB"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x12c796f54c13183ed00e394036509349126f3a07"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WBTC"
+token1 = "ARB"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc35ab4ee32198d3f7e82f9e5aa66daafb7a73c6e"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "DAI"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x46c47c8daabca3e15bf238cda365894046bafa23"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "DAI"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x2c089ee1080b091fb3b73df94f7840b33fbca020"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WBTC"
+token1 = "DAI"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xe1450f03e21a7daadda235ef400aaa788cf429d5"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WBTC"
+token1 = "GMX"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xa6856114f06e5bc6f4932f9f10ca36d4e60dfe48"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "GMX"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x671bfa077667eccf6aa8acdbe53f92ecba96ddf3"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "GMX"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x385b4b453ea691a62442ac25aa15caadd6d20915"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "WBTC"
+token1 = "GMX"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x97a245cbb56fefeb838e0370c1607cbba3d0181a"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "WBTC"
+token1 = "wstETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xd41c46be6d2efd226c38520bfc51d9ae4cd3406d"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "WBTC"
+token1 = "wstETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x1f58673666f29c7780390ad22a3a8f8542332b82"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "WBTC"
+token1 = "wstETH"
+decimals0 = 8
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x254026b59805235f73cd8c388cc886614d2ce78d"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x1001dd6dd96a89771eb268929a583c8c1ac924ba"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xc051405edef0e64ebfc501cfe1158eb0d74f3208"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x7f457e25a92bad1aeecf2250a4ff80135f4e35c1"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "ARB"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6f2cc2a4bf05df147d9b858712e8280998f4764a"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "ARB"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x0d1e3e09771ed01a4d554add165f280ee2aae17c"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "ARB"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x6fa169623cef8245f7c5e457f994686ef8e8bf68"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "ARB"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xdb3d8a8eb6a3546160c60d907ddf60057a07b1ff"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "ARB"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x69c83009f092e9a34c20845425b401760a993529"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "wstETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xb6e7871e7fd10b12153a6baaca3ae6eec53d1321"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xddbe747d357f0678193efc36a1ae20a2a55d01b4"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "wstETH"
+token1 = "ARB"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x30722d9202225f4cc96e4f519583a203a7cec812"
+kind = "UNISWAP_V3"
+fee_bps = 5
+token0 = "DAI"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 10
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0xbbd51d8fc750de753e183bdbf019adad39c189cc"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "DAI"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x25ccba1087142aa333db02665974d7e379e35ed7"
+kind = "UNISWAP_V3"
+fee_bps = 100
+token0 = "DAI"
+token1 = "GMX"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 200
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x54fbfc201c1e0a75e6fab076a3ef16f0a909bb28"
+kind = "UNISWAP_V3"
+fee_bps = 1
+token0 = "wstETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 1
+
+[[live.extra_pools]]
+protocol_id = "uniswap-v3"
+address = "0x9e14b4468644050ff5e163f2568bbdb0fa8c76b3"
+kind = "UNISWAP_V3"
+fee_bps = 30
+token0 = "wstETH"
+token1 = "DAI"
+decimals0 = 18
+decimals1 = 18
+tick_spacing = 60
+
+
+
+[discovery]
+enabled = true
+# 可选：CoinGecko Demo/Pro Key（免费 Demo 约 1 万次/月）。留空用 GeckoTerminal 公共端点。
+coingecko_api_key = ""
+interval_sec = 1800
+lookback_blocks = 5000
+min_tvl_usd = 10000
+max_new_pools = 20
+max_total_pools = 30

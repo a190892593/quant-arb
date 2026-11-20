@@ -26,9 +26,10 @@ const DEFAULT_BASE: &str = "https://api.binance.com";
 /// 交易所标识（与 `OrderBook.exchange` / `Instrument.exchange` 一致）。
 const EXCHANGE: &str = "binance";
 /// 所有 HTTP 请求超时。
-const HTTP_TIMEOUT_SECS: u64 = 10;
+const HTTP_TIMEOUT_SECS: u64 = 5;
 
 /// Binance 公共行情客户端。
+#[derive(Clone)]
 pub struct BinanceClient {
     client: Client,
     base: String,

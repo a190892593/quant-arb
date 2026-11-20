@@ -22,10 +22,13 @@ pub mod db;
 pub mod dex;
 pub mod domain;
 pub mod engine;
+pub mod evm;
 pub mod feed;
 pub mod ledger;
 pub mod paper;
 pub mod risk;
+pub mod search_config;
+pub mod source_config;
 pub mod strategy;
 
 pub fn version() -> &'static str {

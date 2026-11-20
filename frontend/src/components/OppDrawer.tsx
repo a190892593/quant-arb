@@ -6,6 +6,7 @@ import { capacityFor, failureModels, gatesFor, legsFor, scoreFor } from "../lib/
 import { LineChart } from "../charts/LineChart";
 import { Waterfall } from "../charts/Waterfall";
 import { QualityChip, StatusChip } from "../ui/Chip";
+import { Drawer } from "../ui/Drawer";
 import { toast } from "../ui/Toast";
 
 type Tab = "eval" | "route" | "cap" | "risk" | "plan";
@@ -74,11 +75,11 @@ export function OppDrawer({ id, onClose }: { id: string; onClose: () => void }) 
           <div className="dw-ribbon">
             {[
               { label: "理论价差", m: "M0", v: o.theo, note: "未扣成本", bps: o.theoBps },
-              { label: "可成交毛利", m: "M1", v: o.gross, note: "按池状态 / 盘口深度", bps: (o.gross / o.notional) * 10000 },
-              { label: "净利润", m: "M2", v: o.net, note: `已扣 ${fmt.num(o.costTotal)} 成本`, bps: o.netBps },
+              { label: "可成交毛利", m: "M1", v: o.gross, note: "按链上池状态 / 盘口深度", bps: (o.gross / o.notional) * 10000 },
+              { label: "净利润", m: "—", v: o.net, note: `已扣 ${fmt.num(o.costTotal)} 成本（非模拟等级）`, bps: o.netBps },
               { label: "压力净利", m: "M3", v: o.stressNet, note: "50% 折扣 + 延迟 + 回滚", bps: (o.stressNet / o.notional) * 10000 },
             ].map((c) => (
-              <div className="dw-cell" key={c.m}>
+              <div className="dw-cell" key={c.label}>
                 <span>
                   {c.label} <em className="tag-mini">{c.m}</em>
                 </span>
@@ -87,6 +88,23 @@ export function OppDrawer({ id, onClose }: { id: string; onClose: () => void }) 
               </div>
             ))}
           </div>
+
+          {(() => {
+            const mp = o.rejections?.find((r) => r.key === "min_profit");
+            const gapUsd = mp ? mp.limit - mp.actual : null;
+            const gapBps =
+              gapUsd !== null && o.notional > 0 ? (gapUsd / o.notional) * 10000 : null;
+            return (
+              <div className="hint mt-8">
+                毛边 {fmt.num((o.gross / o.notional) * 10000, 2)} bps · 成本{" "}
+                {fmt.num((o.costTotal / o.notional) * 10000, 2)} bps · 净利{" "}
+                {fmt.num(o.netBps, 2)} bps
+                {gapBps !== null &&
+                  ` · 距执行门槛 ${fmt.num(gapBps, 2)} bps（${fmt.num(gapUsd ?? 0, 2)} USDC）`}
+                {mp?.severity === "WARNING" && " · 已达观察层"}
+              </div>
+            );
+          })()}
 
           <section className="dw-sec">
             <div className="dw-sec-head">
@@ -138,20 +156,28 @@ export function OppDrawer({ id, onClose }: { id: string; onClose: () => void }) 
               <tbody>
                 {[
                   { m: "M0", name: "理论价差", note: "报价瞬间价差，未扣任何成本", v: o.theo, bps: o.theoBps },
-                  { m: "M1", name: "历史状态插入", note: "按报价区块实际池状态重放", v: o.gross, bps: (o.gross / o.notional) * 10000 },
-                  { m: "M2", name: "保守竞争", note: "扣除全部可计量成本与竞争折价", v: o.net, bps: o.netBps },
+                  { m: "M1", name: "链上实时状态", note: "V2 getReserves / V3 slot0+liquidity（只读）", v: o.gross, bps: (o.gross / o.notional) * 10000 },
+                  {
+                    m: "M2",
+                    name: o.m2 ? (o.m2.passed ? "REVM 分叉复核（通过）" : "REVM 分叉复核（未通过）") : "REVM 分叉复核（待运行）",
+                    note: o.m2
+                      ? `block ${o.m2.block} · M1 ${fmt.num(o.m2.m1Out)} → M2 ${fmt.num(o.m2.m2Out)} · ${o.m2.diffBps.toFixed(2)} bps · gas ${o.m2.gasUsed}`
+                      : "扫描按间隔调用 QuoterV2 复核，通过后标记 VERIFIED",
+                    v: null,
+                    bps: null,
+                  },
                   { m: "M3", name: "压力模型", note: "50% 折扣 + 延迟 250 ms + 回滚 8%", v: o.stressNet, bps: (o.stressNet / o.notional) * 10000 },
                 ].map((s) => (
                   <tr key={s.m}>
                     <td><div className="m-label"><span className="m-grade">{s.m}</span>{s.name}</div></td>
                     <td className="muted">{s.note}</td>
-                    <td className={`is-num ${signClass(s.v)}`}>{fmt.signed(s.v)}</td>
-                    <td className="is-num muted">{fmt.num(s.bps, 1)}</td>
+                    <td className={`is-num ${s.v === null ? "muted" : signClass(s.v)}`}>{s.v === null ? "—" : fmt.signed(s.v)}</td>
+                    <td className="is-num muted">{s.bps === null ? "—" : fmt.num(s.bps, 1)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <div className="hint mt-8">验收以 M2 达到门槛为准；M3 为负仍可观察，但不得进入执行计划。</div>
+            <div className="hint mt-8">M2 由 REVM 在报价区块的链上状态上重放 QuoterV2；通过后机会标记为 VERIFIED（A），未通过则保留 M1 并给出 m2_mismatch 拒绝。</div>
           </section>
         </>,
       );
@@ -341,13 +367,20 @@ export function OppDrawer({ id, onClose }: { id: string; onClose: () => void }) 
   };
 
   return (
-    <aside className="drawer" role="dialog" aria-label="机会详情">
-      <div className="drawer-head">
-        <div className="drawer-title">
+    <Drawer
+      ariaLabel="机会详情"
+      storageKey="opportunity"
+      onClose={onClose}
+      head={
+        <>
           <div className="row" style={{ gap: 8 }}>
             <span className="drawer-id">{o.id}</span>
             <StatusChip status={o.status} />
             <QualityChip quality={o.quality} />
+            <div className={`countdown${o.status === "ACTIONABLE" && remain <= 8 ? " is-low" : ""}`}>
+              <span>计划有效期</span>
+              <b>{o.status === "ACTIONABLE" ? (remain > 0 ? `${remain} s` : "已过期") : "已失效"}</b>
+            </div>
           </div>
           <div className="drawer-sub">
             {data.STRATEGY[o.strategy].label} · {data.CHAIN[o.chain].label}
@@ -357,17 +390,35 @@ export function OppDrawer({ id, onClose }: { id: string; onClose: () => void }) 
             <span className="sep" />
             {o.model} · 风险 {o.riskScore}
           </div>
-        </div>
-        <div className="drawer-meta">
-          <div className={`countdown${o.status === "ACTIONABLE" && remain <= 8 ? " is-low" : ""}`}>
-            <span>计划有效期</span>
-            <b>{o.status === "ACTIONABLE" ? (remain > 0 ? `${remain} s` : "已过期") : "已失效"}</b>
-          </div>
-          <button className="btn btn--icon" onClick={onClose} aria-label="关闭详情">
-            <Icon name="x" size={14} />
+        </>
+      }
+      footer={
+        <>
+          <span className="hint">{o.venue} · 名义 {fmt.num(o.notional, 0)} USDC</span>
+          <button className="btn" onClick={() => toast("已加入观察列表", { sub: `${o.id} 将在数据恢复完整后重新评估`, variant: "warn" })}>
+            <Icon name="target" size={13} /> 加入观察
           </button>
-        </div>
-      </div>
+          <button
+            className="btn btn--primary"
+            disabled={o.status !== "ACTIONABLE"}
+            onClick={async () => {
+              try {
+                await actions.execute(o.rawId ?? o.id);
+                toast(`Paper 执行已生成 TP-${o.id.slice(4)}`, { sub: "跳转到执行明细查看双腿与账本流水" });
+                setTimeout(() => (location.hash = "#/executions"), 420);
+              } catch (e) {
+                toast("执行被拒绝", {
+                  sub: e instanceof Error ? e.message : String(e),
+                  variant: "warn",
+                });
+              }
+            }}
+          >
+            <Icon name="sim" size={13} /> 生成模拟执行
+          </button>
+        </>
+      }
+    >
 
       <div className="drawer-tabs" role="tablist">
         {TABS.map((t) => (
@@ -385,31 +436,6 @@ export function OppDrawer({ id, onClose }: { id: string; onClose: () => void }) 
 
       {body()}
 
-      <div className="drawer-foot">
-        <span className="hint">{o.venue} · 名义 {fmt.num(o.notional, 0)} USDC</span>
-        <button className="btn" onClick={() => toast("已加入观察列表", { sub: `${o.id} 将在数据恢复完整后重新评估`, variant: "warn" })}>
-          <Icon name="target" size={13} /> 加入观察
-        </button>
-        <button
-          className="btn btn--primary"
-          disabled={o.status !== "ACTIONABLE"}
-          onClick={async () => {
-            // 真实 Paper 执行：后端会重新做风控校验并写账本
-            try {
-              await actions.execute(o.rawId ?? o.id);
-              toast(`Paper 执行已生成 TP-${o.id.slice(4)}`, { sub: "跳转到执行明细查看双腿与账本流水" });
-              setTimeout(() => (location.hash = "#/executions"), 420);
-            } catch (e) {
-              toast("执行被拒绝", {
-                sub: e instanceof Error ? e.message : String(e),
-                variant: "warn",
-              });
-            }
-          }}
-        >
-          <Icon name="sim" size={13} /> 生成模拟执行
-        </button>
-      </div>
-    </aside>
+    </Drawer>
   );
 }

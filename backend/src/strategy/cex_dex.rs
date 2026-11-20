@@ -28,7 +28,8 @@ pub fn scan(
     view: &MarketView<'_>,
     params: &CexDexParams,
     notional_usd: Decimal,
-    available: &HashMap<String, Decimal>,
+    dex_available: &HashMap<String, Decimal>,
+    cex_available: &HashMap<String, Decimal>,
     prefer_cex_first: bool,
 ) -> Vec<Opportunity> {
     let mut out = Vec::new();
@@ -57,8 +58,9 @@ pub fn scan(
         };
 
         let age_ms = (view.now - book.recv_ts).num_milliseconds();
-        if age_ms > 1_000 {
-            // 盘口过期：不允许生成有效机会
+        // 轮询行情的盘口年龄至少是一个同步周期；用 8s 与风控 book_max_age_ms 对齐，
+        // 超龄在后续 book_quality 中降级/拒绝，而不是在这里静默丢弃全部 CEX–DEX。
+        if age_ms > 8_000 {
             continue;
         }
 
@@ -100,7 +102,8 @@ pub fn scan(
                 mid,
                 qty,
                 direction,
-                available,
+                dex_available,
+                cex_available,
                 prefer_cex_first,
             ) else {
                 continue;
@@ -124,7 +127,8 @@ fn evaluate_direction(
     mid: Decimal,
     qty: Decimal,
     direction: Direction,
-    available: &HashMap<String, Decimal>,
+    dex_available: &HashMap<String, Decimal>,
+    cex_available: &HashMap<String, Decimal>,
     prefer_cex_first: bool,
 ) -> Option<Opportunity> {
     let now = Utc::now();
@@ -214,6 +218,15 @@ fn evaluate_direction(
         (proceeds_usd - cex_cost, dex_fee, cex_fee, path.price_impact_bps)
     };
 
+    // 毛利还原到「未扣 DEX 手续费」：path.amount_out 已含费，成本桥里手续费只计一次。
+    let fee_bps_total: Decimal = path
+        .legs
+        .iter()
+        .map(|l| Decimal::from(l.fee_bps))
+        .sum();
+    let gross_usd = gross_usd + dex_fee_usd;
+    let dex_impact_ex_fee = (dex_impact_bps - fee_bps_total).max(Decimal::ZERO);
+
     let actual_notional = base_qty * mid;
     if actual_notional <= Decimal::ZERO {
         return None;
@@ -243,7 +256,10 @@ fn evaluate_direction(
     costs.dex_fee = dex_fee_usd;
     costs.cex_fee = cex_fee_usd;
     costs.gas = gas_usd(params, path.gas_units);
-    costs.price_impact = usd_bps(actual_notional, dex_impact_bps + cex_impact_bps.max(Decimal::ZERO));
+    costs.price_impact = usd_bps(
+        actual_notional,
+        dex_impact_ex_fee + cex_impact_bps.max(Decimal::ZERO),
+    );
     costs.delay_reserve = usd_bps(actual_notional, params.delay_reserve_bps);
     costs.hedge_compensation = usd_bps(actual_notional, params.compensation_bps);
     costs.rebalance = usd_bps(actual_notional, params.rebalance_bps);
@@ -297,7 +313,7 @@ fn evaluate_direction(
         gas_units: path.gas_units,
         gas_usd: costs.gas,
         price_impact_bps: path.price_impact_bps,
-        model_level: ModelLevel::M2,
+        model_level: ModelLevel::M1,
         block_number: path.block_number,
         created_at: now,
     };
@@ -314,7 +330,7 @@ fn evaluate_direction(
         venue: format!("dex-{}", view.chain_name.to_lowercase()),
         asset: dex_asset.clone(),
         required: dex_required,
-        available: available.get(&dex_asset).copied().unwrap_or(Decimal::ZERO),
+        available: dex_available.get(&dex_asset).copied().unwrap_or(Decimal::ZERO),
     });
     let (cex_asset, cex_required) = match cex_side {
         Side::Buy => (inst.quote.clone(), cex_quote.notional),
@@ -324,7 +340,7 @@ fn evaluate_direction(
         venue: format!("cex-{}", inst.exchange),
         asset: cex_asset.clone(),
         required: cex_required,
-        available: available.get(&cex_asset).copied().unwrap_or(Decimal::ZERO),
+        available: cex_available.get(&cex_asset).copied().unwrap_or(Decimal::ZERO),
     });
 
     let scenario = build_scenario(
@@ -338,8 +354,14 @@ fn evaluate_direction(
     let data_quality = book_quality(book, view.now).min_rank(pool_quality(view, &edges));
     let capacity = min_capacity(view, &path, actual_notional, book, inst, cex_side, params);
 
+    let id_seed = format!(
+        "cex_dex|{}|{}|{:?}|{}",
+        inst.exchange, inst.symbol, direction, actual_notional
+    );
+    let opportunity_id = format!("opp_{:016x}", crate::domain::plan::fnv1a_64(&id_seed));
+
     let mut opp = Opportunity {
-        opportunity_id: crate::domain::new_id("opp"),
+        opportunity_id,
         strategy_type: StrategyType::CexDex,
         chain_id: view.chain_id,
         chain_name: view.chain_name.clone(),
@@ -361,8 +383,9 @@ fn evaluate_direction(
         scenario,
         risk_score: crate::domain::market::RiskScore::from_components(vec![]),
         data_quality,
-        model_level: ModelLevel::M2,
+        model_level: ModelLevel::M1,
         confidence: "M2 盘口深度成交 + 延迟/补偿准备金".into(),
+        m2: None,
         quote_timestamp: now,
         quote_block_number: path.block_number,
         book_age_ms: (view.now - book.recv_ts).num_milliseconds(),
@@ -447,19 +470,12 @@ fn book_quality(book: &OrderBook, now: chrono::DateTime<Utc>) -> DataQuality {
         return DataQuality::Invalid;
     }
     let age = (now - book.recv_ts).num_milliseconds();
-    if age <= 150 {
-        DataQuality::Verified
-    } else if age <= 250 {
-        DataQuality::High
-    } else if age <= 1_000 {
-        DataQuality::Medium
-    } else {
-        DataQuality::Invalid
-    }
+    // 与风控 book_max_age_ms（8s）对齐；轮询行情下盘口年龄至少一个同步周期。
+    DataQuality::from_age(age, 8_000)
 }
 
 fn pool_quality(view: &MarketView<'_>, edges: &[HopEdge]) -> DataQuality {
-    let mut worst = DataQuality::Verified;
+    let mut worst = DataQuality::High;
     for e in edges {
         let Some(rt) = view.pools.get(&e.pool_id) else {
             return DataQuality::Invalid;
@@ -467,16 +483,8 @@ fn pool_quality(view: &MarketView<'_>, edges: &[HopEdge]) -> DataQuality {
         if !rt.pool.verified || !rt.pool.execution_allowed {
             return DataQuality::Invalid;
         }
-        let age = rt.state.age_ms(view.now);
-        let q = if age > 3_000 {
-            DataQuality::Invalid
-        } else if age > 1_000 {
-            DataQuality::Low
-        } else if age > 300 {
-            DataQuality::Medium
-        } else {
-            DataQuality::High
-        };
+        // 未接 REVM/M2：实时快照最高只到 B。
+        let q = DataQuality::from_age(rt.state.age_ms(view.now), 8_000);
         if q.rank() > worst.rank() {
             worst = q;
         }

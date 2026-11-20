@@ -157,3 +157,39 @@ fn demo_market_scan_respects_pool_state_change() {
     assert_eq!(second.stats.reused, 0);
     assert!(second.stats.candidates >= 1);
 }
+
+
+#[test]
+fn fixed_size_ladder_produces_per_size_quotes() {
+    let cfg = arb_backend::config::Config::default();
+    let market = DemoMarket::new(&cfg, 20261119);
+    let params = DexScanParams::from_config(&cfg);
+    let mut ctx = context(dec("2500"));
+    let mut cache = MultiHopCache::new();
+    let out = scan_market(&market, &params, &mut ctx, &mut cache);
+
+    let expected: Vec<Decimal> = params.notional_ladder.clone();
+    let mut with_quotes = 0usize;
+    for r in &out.routes {
+        if r.size_quotes.is_empty() {
+            continue;
+        }
+        with_quotes += 1;
+        assert!(
+            r.size_quotes.windows(2).all(|w| w[0].notional_usd <= w[1].notional_usd),
+            "档位报价必须按名义金额升序"
+        );
+        for q in &r.size_quotes {
+            assert!(q.notional_usd > Decimal::ZERO);
+            assert!(q.amount_in > Decimal::ZERO);
+            assert!(q.amount_out > Decimal::ZERO);
+            assert!(
+                expected.iter().any(|v| (*v - q.notional_usd).abs() < Decimal::from(2)),
+                "档位 {} 应来自固定 ladder {:?}",
+                q.notional_usd,
+                expected
+            );
+        }
+    }
+    assert!(with_quotes > 0, "至少一条路线应有固定档位报价");
+}

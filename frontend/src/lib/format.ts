@@ -32,6 +32,14 @@ export const fmt = {
     if (v >= 1e4) return (n / 1e3).toFixed(1) + "k";
     return fmt.num(n, 0);
   },
+  /** ISO 时间戳 → HH:MM:SS（本地时区），用于「出现时间」列 */
+  hhmmss(iso: string | null | undefined): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    const p = (v: number) => String(v).padStart(2, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  },
   clock(d: Date): string {
     const p = (v: number) => String(v).padStart(2, "0");
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;

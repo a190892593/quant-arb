@@ -74,6 +74,28 @@ export interface Opportunity {
   expiresAt?: string;
   capacity?: number;
   detectedAt?: string;
+  /** M2（REVM 分叉）复核结果 */
+  m2?: {
+    passed: boolean;
+    block: number;
+    amountIn: number;
+    m1Out: number;
+    m2Out: number;
+    diffBps: number;
+    gasUsed: number;
+    elapsedMs: number;
+    detail: string;
+  };
+  /** 风控违规/告警明细（含 min_profit 缺口，用于 near-miss 展示） */
+  rejections?: {
+    key: string;
+    label: string;
+    severity: string;
+    limit: number;
+    actual: number;
+    unit: string;
+    message: string;
+  }[];
   /* derived by the dataset builder */
   costTotal: number;
   net: number;
@@ -669,8 +691,17 @@ export interface RiskViolationRecord {
   message: string;
 }
 
-export interface RouteScanRecord {
-  route_id: string;
+export interface SizeQuote {
+  notional_usd: number;
+  amount_in: number;
+  amount_out: number;
+  gross_usd: number;
+  total_cost_usd: number;
+  net_usd: number;
+  net_bps: number;
+}
+
+export interface RouteScanRecord {  route_id: string;
   chain_id: number;
   start_token: string;
   route_type: RouteType;
@@ -703,6 +734,7 @@ export interface RouteScanRecord {
   model_level: ModelLevel;
   opportunity_id: string | null;
   capacity_usd: number;
+  size_quotes: SizeQuote[];
   /** full：本轮全量重算；incremental：复用缓存（池状态未变）。 */
   source: string;
 }
@@ -770,6 +802,7 @@ export interface DexEngineParams {
   min_hops: number;
   max_hops: number;
   max_candidates: number;
+  max_pools: number;
   max_visits: number;
   max_elapsed_ms: number;
   min_input_usd: number;
@@ -805,3 +838,95 @@ export interface DexEngineResponse {
   graph: GraphStats;
   cache: RouteCacheStats;
 }
+
+/** 搜索 Token 白/黑名单条目 */
+export type SearchTokenEntry = {
+  symbol: string;
+  address: string;
+  decimals: number;
+  status: string;
+  source: string;
+};
+
+/** 可在线修改的搜索参数 */
+export type SearchParamsConfig = {
+  min_pool_tvl_usd: number;
+  max_pool_share_pct: number;
+  min_input_usd: number;
+  max_input_usd: number;
+  max_pool_state_age_ms: number;
+  min_hops: number;
+  max_hops: number;
+  max_pools: number;
+  max_evaluate: number;
+  max_evaluate_ms: number;
+  notional_ladder: number[];
+  base_symbols: string[];
+  // 规模与算力预算
+  max_candidates: number;
+  grid_points: number;
+  refine_iters: number;
+  // 时效
+  ttl_sec: number;
+  requote_age_ms: number;
+  full_rescan_blocks: number;
+  // 成本与安全垫
+  gas_price_gwei: number;
+  priority_fee_usd: number;
+  flash_fee_bps: number;
+  delay_reserve_bps: number;
+  mev_reserve_bps: number;
+  profit_discount_pct: number;
+  model_mismatch_max_bps: number;
+  // 压力模型
+  stress_adverse_bps: number;
+  stress_gas_increase_pct: number;
+};
+
+export type SearchConfigResponse = {
+  tokens: SearchTokenEntry[];
+  whitelist: number;
+  blacklist: number;
+  params: SearchParamsConfig;
+  effective: Partial<SearchParamsConfig>;
+  note: string;
+};
+
+export type DiscoveryStatus = {
+  enabled: boolean;
+  running: boolean;
+  last_block: number;
+  latest_block: number;
+  scanned_logs: number;
+  new_pools: number;
+  new_tokens: number;
+  total_pools: number;
+  last_run_at: string;
+  message: string;
+  source: string;
+};
+
+export type SourceEntry = {
+  id: string;
+  name: string;
+  kind: string;
+  enabled: boolean;
+  priority: number;
+  api_key: string;
+  url: string;
+  rate_limit_per_min: number;
+  last_status: string;
+  last_used_at: string;
+};
+
+export type SourceConfig = {
+  strategy: string;
+  interval_sec: number;
+  sources: SourceEntry[];
+};
+
+export type SourcePresetResponse = {
+  mode: string;
+  warnings: string[];
+  config: SourceConfig;
+};

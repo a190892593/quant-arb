@@ -4,29 +4,34 @@
 
 use chrono::Utc;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::domain::market::{DataQuality, ModelLevel, RiskViolation};
 use crate::domain::opportunity::Opportunity;
-use crate::domain::types::{ExecutionState, OppStatus, StrategyType};
+use crate::domain::types::{ExecutionState, OppStatus, RiskSeverity, StrategyType};
 use crate::engine::{AppState, WsEvent};
+use crate::evm::RpcClient;
 use crate::paper::ExecMarket;
-use crate::strategy::{MarketView, ScanConfig, ScanContext};
+use crate::strategy::{MarketView, ScanConfig, ScanContext, m2};
 
 /// 启动扫描任务。
 pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let interval = Duration::from_millis(state.config.paper.scan_interval_ms.max(200));
         loop {
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
-                _ = state.scan_now.notified() => {}
-            }
+            let cycle_started = Instant::now();
             if let Err(e) = scan_once(&state, true).await {
                 tracing::error!("扫描失败: {e}");
                 state.stats.write().await.last_error = Some(e.to_string());
+            }
+            // 保持固定节拍：扫描耗时从间隔中扣除，避免固定 sleep 造成周期翻倍。
+            let wait = interval.saturating_sub(cycle_started.elapsed());
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = state.scan_now.notified() => {}
             }
         }
     })
@@ -39,20 +44,16 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         s.state == "RUNNING"
     };
     if !running {
-        // 未启动时仍然 tick 行情，保持盘口与价格新鲜，但不产出机会
-        state.market.write().await.tick();
+        // 行情由 feed 任务独立刷新；停止扫描不会停止真实链同步。
         return Ok(0);
     }
 
     let started = Instant::now();
 
-    // ---- 行情推进 ----
+    // ---- 价格同步到账本 ----
     {
-        let mut m = state.market.write().await;
-        m.tick();
-        // 价格同步到账本：权益按最新价格计算，未实现盈亏才可解释
-        let prices = m.prices.clone();
-        drop(m);
+        // 权益按最新真实价格计算，未实现盈亏才可解释。
+        let prices = state.market.read().await.prices.clone();
         let mut ledger = state.ledger.lock().await;
         for (asset, price) in prices {
             ledger.set_price(&asset, price);
@@ -87,7 +88,7 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         }
     }
 
-    let (opps, dex_routes, dex_stats, dex_graph) = {
+    let (mut opps, dex_routes, dex_stats, dex_graph) = {
         let market = state.market.read().await;
         let prices = market.prices.clone();
         let head_block = market.head_block;
@@ -120,15 +121,10 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
             fill_rate,
         };
 
+        let mut dex_params = state.dex_params.read().await.clone();
         let cfg = ScanConfig {
-            notional_ladder: state
-                .config
-                .paper
-                .notional_ladder
-                .iter()
-                .filter_map(|v| Decimal::from_f64(*v))
-                .collect(),
-            base_symbols: vec!["USDC".into(), "USDT".into()],
+            notional_ladder: dex_params.notional_ladder.clone(),
+            base_symbols: dex_params.base_symbols.clone(),
             cex_first: state
                 .stats
                 .read()
@@ -138,9 +134,21 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         };
         // ---- DEX 多池多跳引擎（新）：图 → 搜索 → 优化 → 模拟 → 门禁 ----
         let risk = state.risk.read().await;
-        let (mut all, dex_routes, dex_stats, dex_graph) = if state.dex_params.enabled {
+        // 真实链下 Gas 价格与原生资产价格来自链上快照，覆盖配置占位值。
+        {
+            let m = state.market.read().await;
+            if m.gas_price_gwei > Decimal::ZERO {
+                dex_params.gas_price_gwei = m.gas_price_gwei;
+            }
+            if let Some(p) = m.prices.get("WETH") {
+                if *p > Decimal::ZERO {
+                    dex_params.native_price_usd = *p;
+                }
+            }
+        }
+        let (mut all, dex_routes, dex_stats, dex_graph) = if dex_params.enabled {
             let mut cache = state.dex_cache.lock().await;
-            let out = crate::strategy::dex_scan::scan(&view, &state.dex_params, &ctx, &mut cache);
+            let out = crate::strategy::dex_scan::scan(&view, &dex_params, &ctx, &mut cache);
             let mut all: Vec<Opportunity> = out
                 .opportunities
                 .into_iter()
@@ -197,9 +205,15 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
                     _ => rejected.push(o.clone()),
                 }
             }
-            actionable.truncate(12);
-            watch.truncate(10);
-            rejected.truncate(4);
+            // 配额需覆盖路线表展示量（最多 100 条路线），否则合并表里大量行
+            // 找不到对应机会，风险/质量列会显示为「—」。
+            let (a_q, w_q, r_q) = match strategy {
+                StrategyType::DexTriple | StrategyType::DexCross => (20, 20, 140),
+                _ => (12, 10, 4),
+            };
+            actionable.truncate(a_q);
+            watch.truncate(w_q);
+            rejected.truncate(r_q);
             kept.extend(actionable);
             kept.extend(watch);
             kept.extend(rejected);
@@ -209,13 +223,67 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         (kept, dex_routes, dex_stats, dex_graph)
     };
 
+    // ---- 继承 M2 证据（按 route_id 保存，金额 5% 容差、区块 150 内有效）----
+    {
+        let evidence = state.m2_evidence.read().await;
+        for o in opps.iter_mut() {
+            let Some(route) = o.dex_route.as_ref() else {
+                continue;
+            };
+            let Some(ev) = evidence.get(&route.route_id).cloned() else {
+                continue;
+            };
+            let matches_amount = if ev.amount_in.is_zero() || route.amount_in.is_zero() {
+                route.amount_in == ev.amount_in
+            } else {
+                ((route.amount_in - ev.amount_in).abs() / route.amount_in) <= Decimal::new(5, 2)
+            };
+            if !matches_amount {
+                continue;
+            }
+            // 证据始终展示；只有足够新（≈78s / 300 区块）才据此升级 M2 + VERIFIED。
+            let fresh = o.quote_block_number.saturating_sub(ev.block) <= 300;
+            o.m2 = Some(ev.clone());
+            if ev.passed && fresh {
+                o.model_level = ModelLevel::M2;
+                o.data_quality = DataQuality::Verified;
+                o.confidence = format!(
+                    "M2 REVM 分叉复核通过（偏差 {:.2} bps）",
+                    ev.diff_bps.to_f64().unwrap_or(0.0)
+                );
+                o.rejections
+                    .retain(|r| r.key != "data_quality" && r.key != "state_snapshot");
+                o.status = if o
+                    .rejections
+                    .iter()
+                    .any(|r| matches!(r.severity, RiskSeverity::HardStop | RiskSeverity::SoftBlock))
+                {
+                    OppStatus::Rejected
+                } else if o.rejections.is_empty() {
+                    OppStatus::Actionable
+                } else {
+                    OppStatus::Watch
+                };
+            }
+        }
+    }
+
     let actionable = opps.iter().filter(|o| o.status == OppStatus::Actionable).count();
     let rejected = opps.iter().filter(|o| o.status == OppStatus::Rejected).count();
     let watch = opps.iter().filter(|o| o.status == OppStatus::Watch).count();
 
     // ---- 推送与持久化 ----
+    // 本轮快照整体替换内存列表（只保留 kept），避免跨轮累积同一路线的重复条目；
+    // M2 证据保存在 state.m2_evidence，按 route_id 在下一轮重新附加。
+    {
+        // 空快照（本轮全是复用路线且未生成机会）不清空已有列表，
+        // 否则前端机会流与路线表的风险/质量列会周期性闪空。
+        let mut list = state.opportunities.write().await;
+        if !opps.is_empty() {
+            *list = opps.iter().take(500).cloned().collect();
+        }
+    }
     for o in &opps {
-        state.push_opportunity(o.clone()).await;
         if state.config.feed.mode != "silent" {
             state.broadcast(WsEvent::Opportunity {
                 opportunity: Box::new(o.clone()),
@@ -230,11 +298,18 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
     // ---- DEX 路线记录：内存 + 落库 + 推送 ----
     {
         // 只保留本轮快照：同一 route_id 的历史版本由数据库保留。
+        // 空快照（引擎刚初始化 / 本轮全量重建尚未产出）不清空已有路线，
+        // 否则前端会看到路线表在每个重建周期闪成空表。
         let mut store = state.dex_routes.write().await;
-        *store = dex_routes.iter().take(500).cloned().collect();
+        if !dex_routes.is_empty() {
+            *store = dex_routes.iter().take(500).cloned().collect();
+        }
     }
     *state.dex_graph.write().await = dex_graph.clone();
-    *state.dex_scan_stats.write().await = dex_stats.clone();
+    // 引擎刚初始化时统计全为 0，若直接覆盖会让界面上的「候选/访问量」闪回 0。
+    if dex_stats.candidates > 0 || dex_stats.reason != "init" {
+        *state.dex_scan_stats.write().await = dex_stats.clone();
+    }
     {
         let mut sims = state.simulations.write().await;
         for r in dex_routes.iter().take(100) {
@@ -314,6 +389,11 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
         st.opportunities_total += opps.len() as u64;
         st.started_at.get_or_insert_with(Utc::now);
         st.last_scan_ms = started.elapsed().as_millis() as u64;
+    }
+    // 每 60 轮清理一次扫描记录与路线快照，避免 DB 无限增长。
+    if state.stats.read().await.scans % 60 == 0 {
+        let _ = crate::db::repo::prune_routes(&state.db, 2_000);
+        let _ = crate::db::repo::prune_scan_runs(&state.db, 2_000);
     }
 
     // ---- 执行（Paper）----
@@ -470,6 +550,15 @@ pub async fn start(state: &Arc<AppState>) {
     if s.state != "RUNNING" {
         s.state = "RUNNING".into();
         s.started_at = Some(Utc::now());
+        // 计数按「本次运行」统计，避免把演示/上一轮的数字带进实时扫描。
+        s.detected = 0;
+        s.actionable = 0;
+        s.rejected = 0;
+        s.watch = 0;
+        s.expired = 0;
+        s.quotes = 0;
+        s.engine_routes = 0;
+        s.engine_visits = 0;
     }
 }
 
@@ -480,10 +569,120 @@ pub async fn stop(state: &Arc<AppState>) {
     s.uptime_ms = 0;
 }
 
+/// M2 后台复核任务：独立于扫描循环，避免 REVM 分叉读取拖慢行情扫描。
+///
+/// 每隔 `m2.every_ms` 取当前净利最高的一条全 V3 机会，用报价区块状态重放 QuoterV2：
+/// - 通过：升级为 M2 + VERIFIED，移除纯行情陈旧导致的质量拒绝；
+/// - 不通过：保留 M1，追加 `m2_mismatch` 硬拒绝与证据；
+/// - 结果回写内存、数据库并广播。
+pub fn spawn_m2(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let every = state.config.m2.every_ms.max(5_000) as u64;
+        loop {
+            tokio::time::sleep(Duration::from_millis(every)).await;
+            if !state.config.m2.enabled {
+                continue;
+            }
+            let candidate = {
+                let opps = state.opportunities.read().await;
+                opps.iter()
+                    .filter(|o| o.dex_route.as_ref().map(m2::is_v3_route).unwrap_or(false))
+                    .max_by(|a, b| a.conservative_net_profit.cmp(&b.conservative_net_profit))
+                    .cloned()
+            };
+            let Some(mut opp) = candidate else { continue };
+            let tokens = state.market.read().await.tokens.clone();
+            if tokens.is_empty() {
+                continue;
+            }
+            let Some(route) = opp.dex_route.clone() else {
+                continue;
+            };
+            let rpc = RpcClient::new(&state.config.m2.rpc, None);
+            match m2::verify_route(&rpc, &route, &tokens, &state.config.m2).await {
+                Ok(ev) => {
+                    let diff = ev.diff_bps;
+                    let passed = ev.passed;
+                    let detail = ev.detail.clone();
+                    state
+                        .m2_evidence
+                        .write()
+                        .await
+                        .insert(route.route_id.clone(), ev.clone());
+                    opp.m2 = Some(ev);
+                    if passed {
+                        opp.model_level = ModelLevel::M2;
+                        opp.data_quality = DataQuality::Verified;
+                        opp.confidence = format!(
+                            "M2 REVM 分叉复核通过（偏差 {:.2} bps）",
+                            diff.to_f64().unwrap_or(0.0)
+                        );
+                        opp.rejections
+                            .retain(|r| r.key != "data_quality" && r.key != "state_snapshot");
+                        opp.status = if opp.rejections.iter().any(|r| {
+                            matches!(r.severity, RiskSeverity::HardStop | RiskSeverity::SoftBlock)
+                        }) {
+                            OppStatus::Rejected
+                        } else if opp.rejections.is_empty() {
+                            OppStatus::Actionable
+                        } else {
+                            OppStatus::Watch
+                        };
+                    } else {
+                        opp.rejections.push(RiskViolation {
+                            key: "m2_mismatch".into(),
+                            label: "M2 分叉复核".into(),
+                            severity: RiskSeverity::HardStop,
+                            limit: Decimal::from_f64(state.config.m2.tolerance_bps)
+                                .unwrap_or(Decimal::from(50)),
+                            actual: diff,
+                            unit: "bps".into(),
+                            message: detail.clone(),
+                        });
+                    }
+                    {
+                        let mut opps = state.opportunities.write().await;
+                        match opps
+                            .iter_mut()
+                            .find(|o| o.opportunity_id == opp.opportunity_id)
+                        {
+                            Some(slot) => *slot = opp.clone(),
+                            None => {
+                                // 复核耗时较长，目标可能已被高频扫描淘汰；插回列表供下一轮继承。
+                                opps.insert(0, opp.clone());
+                                if opps.len() > 500 {
+                                    opps.pop();
+                                }
+                            }
+                        }
+                    }
+                    if let Err(e) = crate::db::repo::save_opportunity(&state.db, &opp) {
+                        tracing::warn!("M2 结果落库失败: {e}");
+                    }
+                    state.broadcast(WsEvent::Opportunity {
+                        opportunity: Box::new(opp.clone()),
+                    });
+                    tracing::info!(
+                        "M2 复核 {}：passed={} diff={:.2}bps {}",
+                        opp.opportunity_id,
+                        passed,
+                        diff.to_f64().unwrap_or(0.0),
+                        detail
+                    );
+                }
+                Err(e) => tracing::warn!("M2 复核失败: {e}"),
+            }
+        }
+    })
+}
+
 /// 健康快照（供 `/system/health`）。
 pub async fn health_json(state: &Arc<AppState>) -> serde_json::Value {
-    let market = state.market.read().await;
-    let books: Vec<_> = market
+    // 只在收集快照期间持锁：本函数后面还要拿 scanner/stats/ledger 的锁，
+    // 持锁跨越 await 会和 feed 的写锁、扫描的读锁互相排队，导致接口长时间挂起。
+    let (books, feed_health, head_block, block_age_ms, gas_price_gwei, pools_len) = {
+        let market = state.market.read().await;
+        let books: Vec<_> = market
         .instruments
         .keys()
         .filter_map(|s| {
@@ -503,13 +702,32 @@ pub async fn health_json(state: &Arc<AppState>) -> serde_json::Value {
                 })
         })
         .collect();
+        (
+            books,
+            market.health.clone(),
+            market.head_block,
+            market.health.block_age_ms,
+            market.gas_price_gwei,
+            market.pools.len(),
+        )
+    };
     serde_json::json!({
-        "db": state.db.health(),
+        "db": state.db.health_nonblocking(),
         "db_path": state.db.path(),
         "feed": state.config.feed.mode,
-        "head_block": market.head_block,
-        "pools": market.pools.len(),
+        "feed_health": feed_health,
+        "head_block": head_block,
+        "block_age_ms": block_age_ms,
+        "gas_price_gwei": gas_price_gwei,
+        "pools": pools_len,
         "books": books,
+        "model_policy": {
+            "revm": true,
+            "m2_available": crate::domain::types::M2_AVAILABLE,
+            "max_model": "M2",
+            "stress_model": "M3",
+            "verified_reserved_for": "M2",
+        },
         "scanner": state.scanner.read().await.clone(),
         "stats": {
             "scans": state.stats.read().await.scans,

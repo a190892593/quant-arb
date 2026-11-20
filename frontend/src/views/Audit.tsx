@@ -48,7 +48,7 @@ function checksFor(j: AuditJob): Check[] {
 
 const MODEL_NOTE: Record<string, string> = {
   M3: "含压力与补偿",
-  M2: "保守竞争",
+  M2: "REVM 分叉复核",
 };
 
 const TIMELINE: readonly { title: string; note: string; ok: boolean }[] = [
@@ -224,8 +224,8 @@ export function Audit() {
               <div className="panel-body">
                 <div className="stack" style={{ gap: 10 }}>
                   <div><div className="row between"><span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>M0</span><span className="hint">理论价差 · 不扣成本</span></div></div>
-                  <div><div className="row between"><span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>M1</span><span className="hint">历史状态插入模拟</span></div></div>
-                  <div><div className="row between"><span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>M2</span><span className="hint">保守竞争 + 深度成交</span></div></div>
+                  <div><div className="row between"><span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>M1</span><span className="hint">链上实时状态（V2 储备 / V3 slot0+liquidity，只读）</span></div></div>
+                  <div><div className="row between"><span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>M2</span><span className="hint">REVM 分叉复核（QuoterV2，报价区块状态）</span></div></div>
                   <div><div className="row between"><span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>M3</span><span className="hint">压力：延迟 / 滑点 / 回滚 / 补偿</span></div></div>
                 </div>
                 <div className="divider" />

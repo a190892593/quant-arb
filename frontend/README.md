@@ -8,10 +8,15 @@ TDD §1.2 / §2.2 规定的前端形态：**React 19 + TypeScript + Vite**，本
 ```powershell
 cd frontend
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # tsc -b && vite build → dist/
-npm run typecheck  # tsc --noEmit
+npm run dev        # http://localhost:5173（API 走 vite proxy → 127.0.0.1:8791）
+npm run typecheck  # tsc -b --noEmit
+npm run publish    # tsc -b + vite build + 复制 dist/ → ../ui（后端同源托管）
 ```
+
+运行模式：`feed.mode = "live"`，界面只展示真实链上/CEX 数据（Arbitrum RPC + Binance 公共行情）。
+M1 为链上只读状态报价；M2 由 REVM 在报价区块的链上状态上重放 QuoterV2 复核，
+通过后机会标记 `M2` + `VERIFIED(A)`（未通过会带 `m2_mismatch`）；M3 为压力情景。
+执行仍是 Paper（`paper.auto_execute = false`），不会真实下单。
 
 > Windows 上若 `vite build` 报 esbuild `Access is denied`（临时目录权限），把 TEMP/TMP 指向工作区内再构建：
 > `$env:TEMP="D:\VibeCoding\quant-arb\.build\tmp"; $env:TMP=$env:TEMP; npm run build`
@@ -30,7 +35,7 @@ npm run typecheck  # tsc --noEmit
 | 机会抽屉（5 页签 + 倒计时 + Esc） | ✅ |
 | 扫描活动条 `ScanStrip`（光束 / 对象轮换 / 事件轮播） | ✅ |
 | 命令面板（Ctrl/Cmd + K） | ✅ |
-| 总览 / DEX 扫描 / CEX–DEX 扫描 | ✅ |
+| 总览 / DEX 扫描 / CEX–DEX 搜索引擎 | ✅ |
 | Paper 执行 / 账户与库存 / 绩效 | ✅ |
 | 账本 / 风控台 / 执行合约 / 系统 / 能力矩阵 | ✅ |
 | 策略配置 ×3（三角 / 跨池 / 对冲） | ✅ |
@@ -130,6 +135,6 @@ cd ..; .\scripts\start.ps1 -Open
 
 **已知限制**
 
-- 后端 demo feed 只产出 DEX 原子机会，`CEX–DEX 扫描` 当前为 0 条（页面显示空状态，不是故障）。
+- 后端 demo feed 只产出 DEX–DEX 机会，`CEX–DEX 搜索引擎` 当前为 0 条（页面显示空状态，不是故障）。
 - 拒绝原因在表格里截断为一行，完整文本在行悬停 `title` 中。
 - 重启后端后扫描器为 `STOPPED`，需在页面点「启动扫描」或调 `/api/scanner/start`。

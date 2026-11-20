@@ -14,8 +14,14 @@ import { routeDetail, routes, runSimulation, scannerEngine } from "../data/api";
 import { fmt, signClass } from "../lib/format";
 import { Icon } from "../lib/icons";
 import { LineChart } from "../charts/LineChart";
-import { Chip } from "../ui/Chip";
+import { Chip, QualityChip, StatusChip } from "../ui/Chip";
 import { toast } from "../ui/Toast";
+import { SortStack, type SortLevel } from "../ui/SortStack";
+import { Drawer } from "../ui/Drawer";
+import { actions, data } from "../data";
+import { useScanState } from "../data/store";
+import { ScanStrip } from "../components/ScanStrip";
+import { SearchConfigDrawer } from "../components/SearchConfigDrawer";
 
 const MODEL_NOTE_FALLBACK =
   "M2 未接入 REVM：本机最高模拟等级为 M1 + M3（M2 不可用）；VERIFIED 仅保留给 M2。";
@@ -69,7 +75,13 @@ type ChipVariant = "ok" | "bad" | "warn" | "accent" | "idle" | "plain";
 type TypeFilter = "ALL" | RouteType;
 type NetFilter = "ALL" | "GT0" | "GE5" | "GE20";
 type HopFilter = "ALL" | "2" | "3" | "4";
-type SortKey = "net" | "netBps" | "notional" | "gross" | "cost" | "gas" | "hops";
+/** 拒绝原因截断到一行 */
+const clip = (s: string, max = 24) => {
+  const t = s.replace(/(\d+\.\d{4})\d+/g, "$1").replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max) + "…" : t;
+};
+
+type SortKey = "net" | "netBps" | "notional" | "gross" | "cost" | "gas" | "hops" | "time";
 
 interface Snapshot {
   routes: RouteScanRecord[];
@@ -147,6 +159,10 @@ const valueOf = (r: RouteScanRecord, key: SortKey): number => {
       return r.gas?.usd ?? 0;
     case "hops":
       return r.hops;
+    case "time":
+      return Date.parse(r.detected_at) || 0;
+    default:
+      return 0;
   }
 };
 
@@ -311,9 +327,13 @@ export function RouteDetail({
   ];
 
   return (
-    <aside className="drawer route-drawer" aria-label="路线详情">
-      <header className="drawer-head">
-        <div>
+    <Drawer
+      ariaLabel="路线详情"
+      storageKey="route-detail"
+      className="route-drawer"
+      onClose={onClose}
+      head={
+        <>
           <div className="drawer-id">{record.route_id}</div>
           <div className="drawer-sub">
             <span className="tag-mini">{TYPE_LABEL[record.route_type] ?? record.route_type}</span>
@@ -325,18 +345,19 @@ export function RouteDetail({
             <span className="sep" />
             <span>{sourceLabel(record.source)}</span>
           </div>
-        </div>
-        <div className="drawer-meta">
-          <Chip variant={lifecycleVariant(record.lifecycle)} dot>
-            {LIFECYCLE_LABEL[record.lifecycle] ?? record.lifecycle}
-          </Chip>
-          <button className="btn btn--icon btn--ghost" onClick={onClose} aria-label="关闭详情">
-            <Icon name="x" />
+        </>
+      }
+      footer={
+        <>
+          <span className="hint">
+            路线记录来自 /api/routes 与 /api/routes/{record.route_id}，不做本地估算。
+          </span>
+          <button className="btn" onClick={onClose}>
+            关闭
           </button>
-        </div>
-      </header>
-
-      <div className="drawer-body">
+        </>
+      }
+    >
         <div className="dw-ribbon">
           {[
             { label: "投入", v: record.notional_usd, bps: null as number | null, note: "名义投入 USDC" },
@@ -390,6 +411,42 @@ export function RouteDetail({
             <b title={record.opportunity_id ?? ""}>{record.opportunity_id ?? "—"}</b>
           </div>
         </div>
+
+        {record.size_quotes.length > 0 && (
+          <section className="dw-sec">
+            <div className="dw-sec-head">
+              资金档位 <span>{record.size_quotes.length} 档</span>
+            </div>
+            <div className="tbl-wrap">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>档位</th>
+                    <th>投入</th>
+                    <th>回款</th>
+                    <th>毛利</th>
+                    <th>成本</th>
+                    <th>净利</th>
+                    <th>bps</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {record.size_quotes.map((q) => (
+                    <tr key={q.notional_usd}>
+                      <td>{fmt.num(q.notional_usd, 0)}</td>
+                      <td>{fmt.num(q.amount_in, 4)}</td>
+                      <td>{fmt.num(q.amount_out, 4)}</td>
+                      <td className={signClass(q.gross_usd)}>{fmt.signed(q.gross_usd)}</td>
+                      <td className="neg">{fmt.signed(-q.total_cost_usd)}</td>
+                      <td className={signClass(q.net_usd)}>{fmt.signed(q.net_usd)}</td>
+                      <td className={signClass(q.net_bps)}>{fmt.signed(q.net_bps, 1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
 
         <section className="dw-sec">
           <div className="dw-sec-head">
@@ -721,17 +778,7 @@ export function RouteDetail({
             <div className="hint">该路线没有 Gas 估算记录。</div>
           )}
         </section>
-      </div>
-
-      <div className="drawer-foot">
-        <span className="hint">
-          路线记录来自 /api/routes 与 /api/routes/{record.route_id}，不做本地估算。
-        </span>
-        <button className="btn" onClick={onClose}>
-          关闭
-        </button>
-      </div>
-    </aside>
+    </Drawer>
   );
 }
 
@@ -746,8 +793,22 @@ export function RouteSearch() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("ALL");
   const [netFilter, setNetFilter] = useState<NetFilter>("ALL");
   const [hopFilter, setHopFilter] = useState<HopFilter>("ALL");
-  const [sort, setSort] = useState<SortKey>("net");
-  const [dir, setDir] = useState<-1 | 1>(-1);
+  const [chainFilter, setChainFilter] = useState<"ALL" | number>("ALL");
+  const [sizeFilter, setSizeFilter] = useState<"ALL" | number>("ALL");
+  const [levels, setLevels] = useState<SortLevel<SortKey>[]>([{ key: "time", dir: -1 }]);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIONABLE" | "WATCH" | "REJECTED">("ALL");
+  const { scanDex } = useScanState();
+  const [cfgOpen, setCfgOpen] = useState(false);
+  // 路线 ↔ 机会 合并：按 opportunity_id 关联，机会侧补上风险分、数据质量与处置状态
+  const oppByRouteId = new Map(data.opps.map((o) => [o.rawId ?? o.id, o]));
+  // 事件提示用真实数字，避免演示常量误导
+  const liveEvents = [
+    { tone: "ok" as const, text: `${data.scanner.quotes.toLocaleString("en-US")} quotes/s · ${data.pools.length} 池在册` },
+    { tone: "info" as const, text: `机会 ${data.opps.length} 条 · 可执行 ${data.opps.filter((o) => o.status === "ACTIONABLE").length}` },
+    { tone: "ok" as const, text: `链头 ${(data.chains[0]?.block ?? 0).toLocaleString("en-US")} · 扫描耗时 ${data.scanner.lastScanMs ?? 0} ms` },
+    { tone: "warn" as const, text: `拒绝 ${data.scanner.rejected} · 观察 ${data.scanner.watch}` },
+    { tone: "ok" as const, text: `已执行 ${data.scanner.executed} · 状态 ${data.scanner.state}` },
+  ];
 
   const engineRef = useRef<DexEngineResponse | null>(null);
   const inFlight = useRef(false);
@@ -801,6 +862,12 @@ export function RouteSearch() {
 
   const filtered = useMemo(() => {
     const list = all
+      .filter((r) => chainFilter === "ALL" || r.chain_id === chainFilter)
+      .filter((r) =>
+        sizeFilter === "ALL"
+          ? true
+          : r.size_quotes.some((q) => Math.round(q.notional_usd) === sizeFilter),
+      )
       .filter((r) => typeFilter === "ALL" || r.route_type === typeFilter)
       .filter((r) => {
         if (netFilter === "ALL") return true;
@@ -813,11 +880,29 @@ export function RouteSearch() {
         if (hopFilter === "2") return r.hops === 2;
         if (hopFilter === "3") return r.hops === 3;
         return r.hops >= 4;
+      })
+      .filter((r) => {
+        if (statusFilter === "ALL") return true;
+        const opp = r.opportunity_id ? oppByRouteId.get(r.opportunity_id) : undefined;
+        return opp ? opp.status === statusFilter : r.lifecycle === "REJECTED" && statusFilter === "REJECTED";
       });
-    return [...list].sort((a, b) => (valueOf(a, sort) - valueOf(b, sort)) * dir);
-  }, [all, typeFilter, netFilter, hopFilter, sort, dir]);
+    return [...list].sort((a, b) => {
+      for (const lv of levels) {
+        const d = valueOf(a, lv.key) - valueOf(b, lv.key);
+        if (d !== 0) return d * lv.dir;
+      }
+      return b.net_usd - a.net_usd;
+    });
+  }, [all, chainFilter, sizeFilter, typeFilter, netFilter, hopFilter, statusFilter, levels, oppByRouteId]);
 
-  const filtersActive = typeFilter !== "ALL" || netFilter !== "ALL" || hopFilter !== "ALL";
+  const chainIds = [...new Set(all.map((r) => r.chain_id))].sort((a, b) => a - b);
+  const filtersActive =
+    chainFilter !== "ALL" ||
+    sizeFilter !== "ALL" ||
+    typeFilter !== "ALL" ||
+    netFilter !== "ALL" ||
+    hopFilter !== "ALL" ||
+    statusFilter !== "ALL";
 
   const emptyText =
     error && !snap
@@ -841,11 +926,14 @@ export function RouteSearch() {
           : "后端尚未产生扫描轮次（run_id 为空）。路由引擎仅在扫描运行且池状态合格时写入结果；页面不会用演示数据填充。";
 
   const onSort = (key: SortKey) => {
-    if (sort === key) setDir((d) => (d === 1 ? -1 : 1));
-    else {
-      setSort(key);
-      setDir(-1);
-    }
+    setLevels((prev) => {
+      const hit = prev.find((l) => l.key === key);
+      if (hit && prev[0]?.key === key) {
+        return prev.map((l, i) => (i === 0 ? { ...l, dir: (l.dir === 1 ? -1 : 1) as -1 | 1 } : l));
+      }
+      const rest = prev.filter((l) => l.key !== key);
+      return [{ key, dir: hit ? hit.dir : -1 }, ...rest];
+    });
   };
 
   const openRoute = (record: RouteScanRecord) => {
@@ -876,6 +964,9 @@ export function RouteSearch() {
     setTypeFilter("ALL");
     setNetFilter("ALL");
     setHopFilter("ALL");
+    setStatusFilter("ALL");
+    setChainFilter("ALL");
+    setSizeFilter("ALL");
   };
 
   const modelNote = engine?.params.model_note || MODEL_NOTE_FALLBACK;
@@ -885,9 +976,9 @@ export function RouteSearch() {
       <div className="page-head">
         <div className="page-head-main">
           <div className="page-eyebrow">
-            <span className="idx">14.3</span> MONITOR · DEX ROUTE SEARCH
+            <span className="idx">02</span> SEARCH · DEX–DEX
           </div>
-          <h1>路由搜索中心</h1>
+          <h1>DEX–DEX 搜索引擎</h1>
           <p className="page-sub">
             多池多跳扫描的记录视图：图构建 → 候选枚举 → 逐腿报价 → 投入优化 → M1 状态一致性 / M3
             压力模拟。净利口径为「回款 − 投入 − 全部显式成本」，AMM 费用与冲击已含在成交价内。
@@ -908,8 +999,35 @@ export function RouteSearch() {
             <Icon name="refresh" />
             刷新
           </button>
+          <button className="btn btn--sm" onClick={() => setCfgOpen(true)} title="打开搜索配置抽屉">
+            <Icon name="system" />
+            搜索配置
+          </button>
+          <button
+            className={`btn btn--sm ${scanDex ? "btn--danger" : "btn--primary"}`}
+            onClick={() => void actions.setScan(!scanDex)}
+            title={scanDex ? "停止链上扫描" : "启动链上扫描"}
+          >
+            <Icon name={scanDex ? "pause" : "play"} />
+            {scanDex ? "停止搜索" : "启动搜索"}
+          </button>
         </div>
       </div>
+
+      <ScanStrip
+        running={scanDex}
+        subjects={
+          data.pools.length
+            ? data.pools.slice(0, 4).map((p) => `${p.chain} · ${p.protocol} · ${p.pair}`)
+            : ["Arbitrum · 等待池状态"]
+        }
+        events={liveEvents}
+        quotes={data.scanner.quotes || 0}
+        pools={data.scanner.pools || data.pools.length}
+        block={data.chains[0]?.block ?? 0}
+        latency={data.scanner.lastScanMs ?? 0}
+        latencyLabel="本轮扫描"
+      />
 
       {error && (
         <div className="route-offline" role="status">
@@ -935,6 +1053,8 @@ export function RouteSearch() {
         </div>
         <span className="tag-mini">{scan?.model_level ?? "M1"}</span>
       </div>
+
+      <SearchConfigDrawer open={cfgOpen} onClose={() => setCfgOpen(false)} />
 
       <div className="kpi-grid route-kpis">
         <div className="kpi">
@@ -1041,6 +1161,36 @@ export function RouteSearch() {
 
         <div className="toolbar">
           <div className="filters">
+            <select
+              value={chainFilter}
+              onChange={(e) =>
+                setChainFilter(e.target.value === "ALL" ? "ALL" : Number(e.target.value))
+              }
+              aria-label="链筛选"
+              style={{ height: 28, padding: "0 6px" }}
+            >
+              <option value="ALL">全部链</option>
+              {chainIds.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sizeFilter}
+              onChange={(e) =>
+                setSizeFilter(e.target.value === "ALL" ? "ALL" : Number(e.target.value))
+              }
+              aria-label="资金档位筛选"
+              style={{ height: 28, padding: "0 6px" }}
+            >
+              <option value="ALL">全部档位</option>
+              {[250, 500, 1000, 2500, 5000, 10000].map((v) => (
+                <option key={v} value={v}>
+                  {v.toLocaleString("en-US")} USD
+                </option>
+              ))}
+            </select>
             <div className="seg" role="group" aria-label="路线类型筛选">
               {(["ALL", "CROSS_POOL", "TRIANGLE", "MULTI_HOP"] as const).map((v) => (
                 <button
@@ -1074,6 +1224,22 @@ export function RouteSearch() {
                 </button>
               ))}
             </div>
+            <div className="seg" role="group" aria-label="状态筛选">
+              {([
+                ["ALL", "全部状态"],
+                ["ACTIONABLE", "可执行"],
+                ["WATCH", "观察"],
+                ["REJECTED", "拒绝"],
+              ] as const).map(([v, label]) => (
+                <button
+                  key={v}
+                  className={statusFilter === v ? "is-active" : ""}
+                  onClick={() => setStatusFilter(v)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {filtersActive && (
               <button className="btn btn--sm btn--ghost" onClick={clearFilters}>
                 <Icon name="x" />
@@ -1081,7 +1247,20 @@ export function RouteSearch() {
               </button>
             )}
           </div>
-          <span className="hint">点击行查看逐腿、指纹、优化曲线与模拟</span>
+          <SortStack
+            levels={levels}
+            onChange={setLevels}
+            options={[
+              { key: "time", label: "出现时间" },
+              { key: "net", label: "净利" },
+              { key: "netBps", label: "净利 bps" },
+              { key: "notional", label: "投入" },
+              { key: "gross", label: "毛利" },
+              { key: "cost", label: "显式成本" },
+              { key: "gas", label: "Gas" },
+              { key: "hops", label: "跳数" },
+            ]}
+          />          <span className="hint">点击行查看逐腿、指纹、优化曲线与模拟</span>
         </div>
 
         <div className="panel-body panel-body--flush">
@@ -1090,31 +1269,38 @@ export function RouteSearch() {
               <thead>
                 <tr>
                   <th>类型</th>
+                  <th className="is-num">链</th>
+                  <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("time")}>
+                    出现{sortArrow(levels[0]?.key === "time", levels[0]?.dir ?? -1)}
+                  </th>
                   <th>Token 闭环路径</th>
                   <th>Pool 路径</th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("hops")}>
-                    跳数{sortArrow(sort === "hops", dir)}
+                    跳数{sortArrow(levels[0]?.key === "hops", levels[0]?.dir ?? -1)}
                   </th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("notional")}>
-                    投入 USD{sortArrow(sort === "notional", dir)}
+                    投入 USD{sortArrow(levels[0]?.key === "notional", levels[0]?.dir ?? -1)}
                   </th>
                   <th className="is-num">回款 USD</th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("gross")}>
-                    毛利{sortArrow(sort === "gross", dir)}
+                    毛利{sortArrow(levels[0]?.key === "gross", levels[0]?.dir ?? -1)}
                   </th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("cost")}>
-                    显式成本{sortArrow(sort === "cost", dir)}
+                    显式成本{sortArrow(levels[0]?.key === "cost", levels[0]?.dir ?? -1)}
                   </th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("net")}>
-                    净利{sortArrow(sort === "net", dir)}
+                    净利{sortArrow(levels[0]?.key === "net", levels[0]?.dir ?? -1)}
                   </th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("netBps")}>
-                    bps{sortArrow(sort === "netBps", dir)}
+                    bps{sortArrow(levels[0]?.key === "netBps", levels[0]?.dir ?? -1)}
                   </th>
                   <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("gas")}>
-                    Gas{sortArrow(sort === "gas", dir)}
+                    Gas{sortArrow(levels[0]?.key === "gas", levels[0]?.dir ?? -1)}
                   </th>
-                  <th>生命周期</th>
+                  <th className="is-num">压力净利</th>
+                  <th className="is-num">风险</th>
+                  <th>数据</th>
+                  <th>状态</th>
                   <th>M1 / M3</th>
                   <th>来源</th>
                 </tr>
@@ -1130,6 +1316,7 @@ export function RouteSearch() {
                 {filtered.map((r) => {
                   const m1 = r.simulation;
                   const m3 = r.stress;
+                  const opp = r.opportunity_id ? oppByRouteId.get(r.opportunity_id) : undefined;
                   return (
                     <tr
                       key={r.route_id}
@@ -1148,6 +1335,8 @@ export function RouteSearch() {
                         <Chip variant="plain">{TYPE_LABEL[r.route_type] ?? r.route_type}</Chip>
                         <span className="cell-sub">{TYPE_DESC[r.route_type] ?? ""}</span>
                       </td>
+                      <td className="is-num muted">{r.chain_id}</td>
+                      <td className="is-num muted" title={r.detected_at}>{fmt.hhmmss(r.detected_at)}</td>
                       <td className="route-path-cell">
                         <div className="route-path-inline">
                           {r.token_path.map((t, i) => (
@@ -1160,7 +1349,7 @@ export function RouteSearch() {
                         <span className="cell-sub">{r.protocols.map(humanizeProtocol).join(" · ")}</span>
                       </td>
                       <td className="route-pool-cell" title={r.pool_path.join(" → ")}>
-                        {r.pool_path.join(" → ") || "—"}
+                        <span className="route-pool-text">{r.pool_path.join(" → ") || "—"}</span>
                       </td>
                       <td className="is-num">{r.hops}</td>
                       <td className="is-num">{fmt.num(r.notional_usd, 0)}</td>
@@ -1170,12 +1359,32 @@ export function RouteSearch() {
                       <td className={cx("is-num", signClass(r.net_usd))}>{fmt.signed(r.net_usd)}</td>
                       <td className={cx("is-num", signClass(r.net_bps))}>{fmt.signed(r.net_bps, 1)}</td>
                       <td className="is-num muted">{r.gas ? fmt.num(r.gas.usd) : "—"}</td>
+                      <td className={cx("is-num", r.stress && signClass(r.stress.net_usd ?? 0))}>
+                        {r.stress ? fmt.signed(r.stress.net_usd) : "—"}
+                      </td>
+                      <td className={cx("is-num", opp ? (opp.riskScore >= 70 ? "pos" : opp.riskScore >= 50 ? "" : "neg") : "muted")}>
+                        {opp ? opp.riskScore : "—"}
+                      </td>
+                      <td>{opp ? <QualityChip quality={opp.quality} /> : <span className="muted">—</span>}</td>
                       <td>
-                        <Chip variant={lifecycleVariant(r.lifecycle)} dot>
-                          {LIFECYCLE_LABEL[r.lifecycle] ?? r.lifecycle}
-                        </Chip>
-                        {r.rejections.length > 0 && (
-                          <span className="cell-sub">{r.rejections.length + " 项拒绝"}</span>
+                        {opp ? (
+                          <>
+                            <StatusChip status={opp.status} />
+                            {opp.reasons && opp.reasons.length > 0 && (
+                              <span className="cell-sub" title={opp.reasons.join(" · ")}>
+                                {clip(opp.reasons[0], 22)}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <Chip variant={lifecycleVariant(r.lifecycle)} dot>
+                              {LIFECYCLE_LABEL[r.lifecycle] ?? r.lifecycle}
+                            </Chip>
+                            {r.rejections.length > 0 && (
+                              <span className="cell-sub">{r.rejections.length + " 项拒绝"}</span>
+                            )}
+                          </>
                         )}
                       </td>
                       <td>
@@ -1224,6 +1433,8 @@ export function RouteSearch() {
           onSimulated={onSimulated}
         />
       )}
+
+
     </>
   );
 }

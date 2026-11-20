@@ -49,6 +49,12 @@ import type {
   RouteType,
   RpcNode,
   ScanRunStats,
+  SearchConfigResponse,
+  SearchParamsConfig,
+  SearchTokenEntry,
+  DiscoveryStatus,
+  SourceConfig,
+  SourcePresetResponse,
   Service,
   SimulationLevel,
   SimulationOutcome,
@@ -223,6 +229,7 @@ function mapOpportunity(o: Raw): Opportunity {
   const rejections = arr<Raw>(o.rejections);
   const depthRejection = rejections.find((r) => str(r.key) === "cex_depth_usage_max_pct");
   const inventory = [...arr<Raw>(o.required_dex_inventory), ...arr<Raw>(o.required_cex_inventory)];
+  const m2raw = obj(o.m2);
 
   return {
     id: shortId(str(o.opportunity_id), "OPP"),
@@ -243,6 +250,28 @@ function mapOpportunity(o: Raw): Opportunity {
     status: str(o.status, "WATCH") as Opportunity["status"],
     ageMs: num(o.quote_age_ms),
     model: str(o.model_level, "M2") as Opportunity["model"],
+    m2: o.m2
+      ? {
+          passed: bool(m2raw.passed),
+          block: num(m2raw.block),
+          amountIn: num(m2raw.amount_in),
+          m1Out: num(m2raw.m1_out),
+          m2Out: num(m2raw.m2_out),
+          diffBps: num(m2raw.diff_bps),
+          gasUsed: num(m2raw.gas_used),
+          elapsedMs: num(m2raw.elapsed_ms),
+          detail: str(m2raw.detail),
+        }
+      : undefined,
+    rejections: arr<Raw>(o.rejections).map((r) => ({
+      key: str(r.key),
+      label: str(r.label),
+      severity: str(r.severity),
+      limit: num(r.limit),
+      actual: num(r.actual),
+      unit: str(r.unit),
+      message: str(r.message),
+    })),
     block: num(o.quote_block_number),
     blockDelta: 0,
     quoteAgeMs: num(o.quote_age_ms),
@@ -1159,6 +1188,15 @@ function mapRouteScanRecord(raw: Raw): RouteScanRecord {
     model_level: str(raw.model_level, "M1") as RouteScanRecord["model_level"],
     opportunity_id: raw.opportunity_id == null ? null : str(raw.opportunity_id),
     capacity_usd: num(raw.capacity_usd),
+    size_quotes: arr<Raw>(raw.size_quotes).map((q) => ({
+      notional_usd: num(q.notional_usd),
+      amount_in: num(q.amount_in),
+      amount_out: num(q.amount_out),
+      gross_usd: num(q.gross_usd),
+      total_cost_usd: num(q.total_cost_usd),
+      net_usd: num(q.net_usd),
+      net_bps: num(q.net_bps),
+    })),
     source: str(raw.source, "full"),
   };
 }
@@ -1225,6 +1263,7 @@ function mapEngineParams(raw: unknown): DexEngineParams {
     min_hops: num(p.min_hops, 2),
     max_hops: num(p.max_hops, 5),
     max_candidates: num(p.max_candidates),
+    max_pools: num(p.max_pools),
     max_visits: num(p.max_visits),
     max_elapsed_ms: num(p.max_elapsed_ms),
     min_input_usd: num(p.min_input_usd),
@@ -1312,8 +1351,7 @@ export async function scannerEngine(): Promise<DexEngineResponse> {
   };
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+async function postJson<T>(path: string, body: unknown): Promise<T> {  const res = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(body),
@@ -1344,4 +1382,87 @@ export async function runSimulation(
   const simulation = mapSimulation(raw.simulation);
   if (!simulation) throw new Error("模拟响应缺少 simulation 字段");
   return simulation;
+}
+
+/* ------------------------------ search config ----------------------------- */
+
+async function sendJson<T>(method: "PUT" | "POST", path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `${path} → HTTP ${res.status}`;
+    try {
+      const payload = obj(await res.json());
+      if (typeof payload.error === "string") message = payload.error;
+      if (Array.isArray(payload.errors)) message = payload.errors.map(String).join("；");
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as T;
+}
+
+export async function fetchSearchConfig(): Promise<SearchConfigResponse> {
+  return get<SearchConfigResponse>("/search/config");
+}
+
+export async function saveSearchConfig(body: {
+  params?: SearchParamsConfig;
+  tokens?: SearchTokenEntry[];
+}): Promise<{ ok: boolean; token_reload_required?: boolean }> {
+  return sendJson("PUT", "/search/config", body);
+}
+
+export async function updateSearchToken(body: {
+  action: "whitelist" | "blacklist" | "remove";
+  symbol: string;
+  address?: string;
+  decimals?: number;
+}): Promise<{ ok: boolean; tokens: SearchTokenEntry[] }> {
+  return sendJson("POST", "/search/tokens", body);
+}
+
+/* ------------------------------- discovery -------------------------------- */
+
+export async function discoveryStatus(): Promise<DiscoveryStatus> {
+  return get<DiscoveryStatus>("/discovery/status");
+}
+
+export async function discoveryScan(): Promise<DiscoveryStatus> {
+  return postJson<DiscoveryStatus>("/discovery/scan", {});
+}
+
+/* ------------------------------- sources --------------------------------- */
+
+export async function fetchSources(): Promise<SourceConfig> {
+  return get<SourceConfig>("/sources");
+}
+
+export async function saveSources(body: SourceConfig): Promise<SourceConfig> {
+  const res = await fetch(`${BASE}/sources`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `sources HTTP ${res.status}`;
+    try {
+      const p = obj(await res.json());
+      if (typeof p.error === "string") message = p.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message);
+  }
+  return (await res.json()) as SourceConfig;
+}
+
+export async function applySourcePreset(
+  mode: "free" | "boost",
+): Promise<SourcePresetResponse> {
+  return postJson<SourcePresetResponse>("/sources/preset", { mode });
 }

@@ -29,6 +29,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/system/controls", get(handlers::system_controls))
         .route("/system/database", get(handlers::system_database))
         .route("/system/restart-check", get(handlers::restart_check))
+        .route(
+            "/search/config",
+            get(handlers::search_config_get).put(handlers::search_config_put),
+        )
+        .route("/search/tokens", post(handlers::search_tokens_post))
+        .route(
+            "/sources",
+            get(handlers::sources_get).put(handlers::sources_put),
+        )
+        .route("/sources/preset", post(handlers::sources_preset))
+        .route("/discovery/status", get(handlers::discovery_status))
+        .route("/discovery/scan", post(handlers::discovery_scan))
         // ---- 链与 DEX ----
         .route("/chains", get(handlers::chains))
         .route("/chains/{chain_id}/health", get(handlers::chain_health))

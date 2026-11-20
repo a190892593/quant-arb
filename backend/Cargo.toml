@@ -8,11 +8,13 @@ anyhow = "1.0.104"
 axum = { version = "0.8.9", features = ["ws"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls", "http2"] }
+revm = { version = "43.0.3", default-features = false, features = ["std", "secp256k1", "c-kzg", "portable"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 rust_decimal = "1.43.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 tokio = { version = "1.54.1", features = ["full"] }
 toml = "1.2.1"
 tower-http = { version = "0.7.1", features = ["cors", "fs", "trace"] }

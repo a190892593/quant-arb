@@ -135,6 +135,17 @@ pub struct RouteLegRecord {
     pub state_age_ms: i64,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SizeQuote {
+    pub notional_usd: Decimal,
+    pub amount_in: Decimal,
+    pub amount_out: Decimal,
+    pub gross_usd: Decimal,
+    pub total_cost_usd: Decimal,
+    pub net_usd: Decimal,
+    pub net_bps: Decimal,
+}
+
 /// 一条被扫描、报价与模拟过的路线。该结构可直接落库并复现计算过程。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouteScanRecord {
@@ -178,6 +189,9 @@ pub struct RouteScanRecord {
     pub model_level: ModelLevel,
     pub opportunity_id: Option<String>,
     pub capacity_usd: Decimal,
+    /// 固定资金档位逐档报价（250/500/1k/2.5k/5k/7.5k/10k）。
+    #[serde(default)]
+    pub size_quotes: Vec<SizeQuote>,
     /// full：本轮全量重算；incremental：复用缓存（池状态未变）。
     pub source: String,
 }

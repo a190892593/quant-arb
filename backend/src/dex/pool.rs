@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
 use crate::domain::market::{PoolKind, PoolRef, PoolState};
-use crate::domain::money::bps_of;
+use crate::domain::money::{bps_of, unit_scale};
 
 use super::graph;
 use super::math;
@@ -153,21 +153,50 @@ impl PoolRuntime {
                 } else {
                     &self.state
                 };
-                let (out, crossed) = math::v3_quote_with_ticks(v3_state, zero_for_one, amount_in);
+                // V3 的状态（sqrtPriceX96 / ticks / liquidity）以**原始单位**保存，
+                // 而引擎其余部分使用人类单位：这里按 token 精度换算后再调用数学。
+                let (dec_in, dec_out) = if zero_for_one {
+                    (self.pool.decimals0, self.pool.decimals1)
+                } else {
+                    (self.pool.decimals1, self.pool.decimals0)
+                };
+                let amount_raw = amount_in * unit_scale(dec_in);
+                let (out_raw, crossed) =
+                    math::v3_quote_with_ticks(v3_state, zero_for_one, amount_raw);
+                let out = out_raw / unit_scale(dec_out);
                 (out, self.v3_spot_price(zero_for_one), crossed)
             }
             PoolKind::StableSwap => {
                 if reserve_in <= Decimal::ZERO || reserve_out <= Decimal::ZERO {
                     return Err(QuoteError::ZeroLiquidity);
                 }
-                let out = math::stableswap_amount_out(
-                    amount_in,
-                    reserve_in,
-                    reserve_out,
-                    self.state.amplification,
-                    fee_bps,
-                );
-                let spot = math::v2_spot_price(reserve_in, reserve_out);
+                let out = if self.state.amplification <= Decimal::ZERO {
+                    math::aerodrome_stable_amount_out(amount_in, reserve_in, reserve_out, fee_bps)
+                } else {
+                    math::stableswap_amount_out(
+                        amount_in,
+                        reserve_in,
+                        reserve_out,
+                        self.state.amplification,
+                        fee_bps,
+                    )
+                };
+                let spot = if self.state.amplification <= Decimal::ZERO {
+                    math::aerodrome_stable_amount_out(
+                        Decimal::ONE,
+                        reserve_in,
+                        reserve_out,
+                        0,
+                    )
+                } else {
+                    math::stableswap_amount_out(
+                        Decimal::ONE,
+                        reserve_in,
+                        reserve_out,
+                        self.state.amplification,
+                        0,
+                    )
+                };
                 (out, spot, 0usize)
             }
             PoolKind::WeightedPool => {
@@ -271,8 +300,12 @@ impl PoolRuntime {
 
     /// V3 原始单位即期价（token_out per token_in）。
     fn v3_spot_price(&self, zero_for_one: bool) -> Decimal {
-        // dec0 = dec1 = 0：保持池内原始单位，与储备量口径一致。
-        let price = math::sqrt_price_x96_to_price(self.state.sqrt_price_x96, 0, 0);
+        // sqrtPriceX96 是原始单位价格；按 token 精度换算为人类单位价格。
+        let price = math::sqrt_price_x96_to_price(
+            self.state.sqrt_price_x96,
+            self.pool.decimals0,
+            self.pool.decimals1,
+        );
         if zero_for_one {
             price
         } else if price <= Decimal::ZERO {
@@ -537,6 +570,8 @@ mod tests {
             address: format!("0x{id}"),
             token0: t0.to_string(),
             token1: t1.to_string(),
+            decimals0: 0,
+            decimals1: 0,
             fee_bps,
             tick_spacing: None,
             tvl_usd: dec("1000000"),

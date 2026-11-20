@@ -4,6 +4,7 @@ import { fmt } from "../lib/format";
 import { Icon } from "../lib/icons";
 import { Chip } from "../ui/Chip";
 import { toast } from "../ui/Toast";
+import { DiscoveryPanel } from "../components/DiscoveryPanel";
 
 type ChipVariant = "ok" | "bad" | "warn" | "accent" | "idle";
 
@@ -58,6 +59,8 @@ export function Pools() {
           </button>
         </div>
       </div>
+
+      <DiscoveryPanel />
 
       <div className="stack">
         <div className="kpi-grid">

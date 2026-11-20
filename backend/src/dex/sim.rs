@@ -387,6 +387,8 @@ mod tests {
                 address: format!("0x{id}"),
                 token0: t0.into(),
                 token1: t1.into(),
+                decimals0: 0,
+                decimals1: 0,
                 fee_bps: 30,
                 tick_spacing: None,
                 tvl_usd: dec("1000000"),

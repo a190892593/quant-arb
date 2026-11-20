@@ -4,8 +4,9 @@ import { data } from "../data";
 import { fmt, signClass } from "../lib/format";
 import { Icon } from "../lib/icons";
 import { QualityChip, StatusChip } from "../ui/Chip";
+import { SortStack, type SortLevel } from "../ui/SortStack";
 
-type SortKey = "net" | "notional" | "stress" | "risk" | "age";
+type SortKey = "net" | "notional" | "stress" | "risk" | "age" | "time";
 
 /** 后端拒绝原因带完整小数位，表格里只留可读的一段 */
 const clip = (s: string, max = 26) => {
@@ -13,8 +14,22 @@ const clip = (s: string, max = 26) => {
   return tidy.length > max ? tidy.slice(0, max) + "…" : tidy;
 };
 
-const sortVal = (o: Opportunity, k: SortKey) =>
-  k === "risk" ? o.riskScore : k === "notional" ? o.notional : k === "age" ? o.ageMs : k === "stress" ? o.stressNet : o.net;
+const sortVal = (o: Opportunity, k: SortKey) => {
+  switch (k) {
+    case "risk":
+      return o.riskScore;
+    case "notional":
+      return o.notional;
+    case "age":
+      return o.ageMs;
+    case "stress":
+      return o.stressNet;
+    case "time":
+      return o.detectedAt ? new Date(o.detectedAt).getTime() : 0;
+    default:
+      return o.net;
+  }
+};
 
 export interface OppTableProps {
   rows: Opportunity[];
@@ -40,8 +55,7 @@ export function OppTable({
   const [strategy, setStrategy] = useState<"ALL" | "dex_triple" | "dex_cross">("ALL");
   const [status, setStatus] = useState("ALL");
   const [q, setQ] = useState("");
-  const [sort, setSort] = useState<SortKey>("net");
-  const [dir, setDir] = useState<-1 | 1>(-1);
+  const [levels, setLevels] = useState<SortLevel<SortKey>[]>([{ key: "time", dir: -1 }]);
 
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -53,21 +67,31 @@ export function OppTable({
           ? `${o.id} ${o.symbol ?? ""} ${o.pair} ${o.venue}`.toLowerCase().includes(needle)
           : true,
       )
-      .sort((a, b) => (sortVal(a, sort) - sortVal(b, sort)) * dir);
-  }, [rows, strategy, status, q, sort, dir, showStrategyFilter]);
+      .sort((a, b) => {
+        for (const lv of levels) {
+          const d = sortVal(a, lv.key) - sortVal(b, lv.key);
+          if (d !== 0) return d * lv.dir;
+        }
+        return b.net - a.net;
+      });
+  }, [rows, strategy, status, q, levels, showStrategyFilter]);
 
   const act = list.filter((o) => o.status === "ACTIONABLE");
   const freshest = [...list].sort((a, b) => a.ageMs - b.ageMs)[0];
 
   const onSort = (k: SortKey) => {
-    if (sort === k) setDir((d) => (d === 1 ? -1 : 1));
-    else {
-      setSort(k);
-      setDir(-1);
-    }
+    setLevels((prev) => {
+      const hit = prev.find((l) => l.key === k);
+      if (hit && prev[0]?.key === k) {
+        return prev.map((l, i) => (i === 0 ? { ...l, dir: (l.dir === 1 ? -1 : 1) as -1 | 1 } : l));
+      }
+      const rest = prev.filter((l) => l.key !== k);
+      return [{ key: k, dir: hit ? hit.dir : -1 }, ...rest];
+    });
   };
 
-  const arrow = (k: SortKey) => (sort === k ? (dir === 1 ? "↑" : "↓") : "");
+  const primary = levels[0];
+  const arrow = (k: SortKey) => (primary && primary.key === k ? (primary.dir === 1 ? "↑" : "↓") : "");
 
   const segBtn = (active: boolean) => (active ? "is-active" : "");
 
@@ -109,7 +133,18 @@ export function OppTable({
             />
           </label>
         </div>
-        <span className="hint">点击行查看盈亏推演</span>
+        <SortStack
+          levels={levels}
+          onChange={setLevels}
+          options={[
+            { key: "time", label: "出现时间" },
+            { key: "net", label: "净利" },
+            { key: "notional", label: "名义" },
+            { key: "stress", label: "压力净利" },
+            { key: "risk", label: "风险" },
+            { key: "age", label: "年龄" },
+          ]}
+        />        <span className="hint">点击行查看盈亏推演</span>
       </div>
 
       <div className="panel-body panel-body--flush">
@@ -118,6 +153,7 @@ export function OppTable({
             <thead>
               <tr>
                 <th>机会</th>
+                <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("time")}>出现 {arrow("time")}</th>
                 <th>策略</th>
                 <th>{variant === "cex" ? "交易对 / 方向" : "场所 / 路线"}</th>
                 <th className="is-num" style={{ cursor: "pointer" }} onClick={() => onSort("notional")}>名义 {arrow("notional")}</th>
@@ -133,7 +169,7 @@ export function OppTable({
             <tbody>
               {list.length === 0 && (
                 <tr>
-                  <td colSpan={11}>
+                  <td colSpan={12}>
                     <div className="empty">{emptyText}</div>
                   </td>
                 </tr>
@@ -145,6 +181,7 @@ export function OppTable({
                   onClick={() => onOpen(o.id)}
                 >
                   <td className="cell-id">{o.id}</td>
+                  <td className="is-num muted" title={o.detectedAt ?? ""}>{fmt.hhmmss(o.detectedAt)}</td>
                   <td>
                     <span className="tag-mini">{data.STRATEGY[o.strategy].short}</span>
                   </td>
@@ -181,7 +218,7 @@ export function OppTable({
                   </td>
                   <td className="is-num muted">{fmt.num(act.reduce((s, o) => s + o.notional, 0), 0)}</td>
                   <td className="is-num pos">{fmt.signed(act.reduce((s, o) => s + o.net, 0))}</td>
-                  <td colSpan={6} className="muted" style={{ fontSize: 9.5 }}>
+                  <td colSpan={7} className="muted" style={{ fontSize: 9.5 }}>
                     名义受深度与库存约束，不等于可同时执行
                   </td>
                 </tr>

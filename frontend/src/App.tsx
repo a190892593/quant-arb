@@ -5,9 +5,8 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Toaster } from "./ui/Toast";
 import { data, startPolling, useDataStatus } from "./data";
 import { Overview } from "./views/Overview";
-import { ScannerDex } from "./views/ScannerDex";
-import { ScannerCex } from "./views/ScannerCex";
 import { RouteSearch } from "./views/RouteSearch";
+import { ScannerCex } from "./views/ScannerCex";
 import { Executions } from "./views/Executions";
 import { Accounts } from "./views/Accounts";
 import { Performance } from "./views/Performance";
@@ -21,12 +20,12 @@ import { Contract } from "./views/Contract";
 import { System } from "./views/System";
 import { Capability } from "./views/Capability";
 import { Pending } from "./views/Pending";
+import { DataSources } from "./views/DataSources";
 
 const ROUTES: Record<string, () => JSX.Element> = {
   overview: Overview,
-  scannerDex: ScannerDex,
+  scannerDex: RouteSearch,
   scannerCex: ScannerCex,
-  routes: RouteSearch,
   executions: Executions,
   accounts: Accounts,
   performance: Performance,
@@ -38,6 +37,7 @@ const ROUTES: Record<string, () => JSX.Element> = {
   risk: Risk,
   contract: Contract,
   system: System,
+  sources: DataSources,
   capability: Capability,
 };
 
@@ -45,9 +45,9 @@ const ROUTES: Record<string, () => JSX.Element> = {
 const URL_ROUTE: Record<string, string> = {
   overview: "overview",
   "scanner-dex": "scannerDex",
+  routes: "scannerDex",
   scanner: "scannerDex",
   "scanner-cex": "scannerCex",
-  routes: "routes",
   executions: "executions",
   accounts: "accounts",
   performance: "performance",
@@ -59,6 +59,7 @@ const URL_ROUTE: Record<string, string> = {
   risk: "risk",
   contract: "contract",
   system: "system",
+  sources: "sources",
   capability: "capability",
 };
 

@@ -1,0 +1,1 @@
+﻿fn main(){for s in ["getPool(address,address,bool)","stable()","getReserves()"]{let x=arb_backend::evm::abi::selector(s);println!("{s} 0x{}",x.iter().map(|b|format!("{b:02x}")).collect::<String>());}}

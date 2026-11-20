@@ -70,6 +70,7 @@ impl TokenGraph {
 
         let mut edges = Vec::new();
         let mut by_token: HashMap<String, Vec<GraphEdge>> = HashMap::new();
+        let node_key = |token: &str| -> String { format!("{}:{}", pools.chain_id(), token) };
         let mut rejected_pools = 0usize;
         let mut eligible_pools = 0usize;
         let mut tokens: BTreeSet<String> = BTreeSet::new();
@@ -96,7 +97,7 @@ impl TokenGraph {
                 };
                 tokens.insert(token_in.clone());
                 tokens.insert(token_out.clone());
-                by_token.entry(token_in).or_default().push(edge.clone());
+                by_token.entry(node_key(&token_in)).or_default().push(edge.clone());
                 edges.push(edge);
             }
         }
@@ -152,14 +153,15 @@ impl TokenGraph {
 
     /// 从某 Token 出发的所有边（不可变，按确定性顺序）。
     pub fn edges_from(&self, token: &str) -> &[GraphEdge] {
+        let key = format!("{}:{}", self.chain_id, token);
         self.by_token
-            .get(token)
+            .get(&key)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
     }
 
     pub fn has_token(&self, token: &str) -> bool {
-        self.by_token.contains_key(token)
+        self.by_token.contains_key(&format!("{}:{}", self.chain_id, token))
     }
 
     /// 某池贡献的全部边（用于反查与增量索引）。
@@ -221,6 +223,8 @@ mod tests {
                 address: format!("0x{id}"),
                 token0: t0.into(),
                 token1: t1.into(),
+                decimals0: 0,
+                decimals1: 0,
                 fee_bps: fee,
                 tick_spacing: None,
                 tvl_usd: dec(tvl),

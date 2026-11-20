@@ -12,6 +12,7 @@ use super::Db;
 use crate::domain::dt_to_ms;
 use crate::domain::execution::ExecutionRecord;
 use crate::domain::ledger::{Account, LedgerEntry};
+use crate::domain::market::{DataQuality, ModelLevel};
 use crate::domain::market::{Chain, Instrument, PoolRef, PoolState, Token};
 use crate::domain::opportunity::Opportunity;
 use crate::domain::plan::TradePlan;
@@ -235,7 +236,16 @@ pub fn load_opportunities(db: &Db, limit: usize) -> Result<Vec<Opportunity>> {
         let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
-            if let Some(v) = from_json::<Opportunity>(&r?) {
+            if let Some(mut v) = from_json::<Opportunity>(&r?) {
+                // 本机未接 REVM：历史/外部记录中的 M2 与 VERIFIED 不再成立。
+                if !crate::domain::types::M2_AVAILABLE {
+                    if v.model_level == ModelLevel::M2 {
+                        v.model_level = ModelLevel::M1;
+                    }
+                    if v.data_quality == DataQuality::Verified {
+                        v.data_quality = DataQuality::High;
+                    }
+                }
                 out.push(v);
             }
         }
@@ -919,6 +929,7 @@ mod tests {
             data_quality: DataQuality::High,
             model_level: ModelLevel::M2,
             confidence: "M2".into(),
+            m2: None,
             quote_timestamp: crate::domain::now(),
             quote_block_number: 1,
             book_age_ms: 0,

@@ -17,6 +17,7 @@
 //! - 报价单位是池内**原始单位（raw units）**。
 //! - 报价可以宽松，但生成可执行机会必须同时通过 M1 模拟与风控。
 
+pub mod discovery;
 pub mod fingerprint;
 pub mod gas;
 pub mod graph;

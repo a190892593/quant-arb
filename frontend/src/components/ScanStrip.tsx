@@ -16,6 +16,7 @@ export interface ScanStripProps {
   poolLabel?: string;
   block: number;
   latency: number;
+  latencyLabel?: string;
 }
 
 const DOT: Record<string, string> = {
@@ -25,7 +26,7 @@ const DOT: Record<string, string> = {
   info: "dot--idle",
 };
 
-export function ScanStrip({ running, subjects, events, quotes, quotesLabel = "quotes/s", pools, poolLabel = "池", block, latency }: ScanStripProps) {
+export function ScanStrip({ running, subjects, events, quotes, quotesLabel = "quotes/s", pools, poolLabel = "池", block, latency, latencyLabel = "扫描延迟" }: ScanStripProps) {
   const [subject, setSubject] = useState(0);
   const [event, setEvent] = useState(0);
   const [fading, setFading] = useState(false);
@@ -63,7 +64,7 @@ export function ScanStrip({ running, subjects, events, quotes, quotesLabel = "qu
       {running && <i className="scanfx-beam" aria-hidden="true" />}
       <span className="scanfx-state">
         <span className={`scan-pulse${running ? "" : " scan-pulse--off"}`} />
-        <b>{running ? "SCANNING" : "STOPPED"}</b>
+        <b>{running ? "SEARCHING" : "STOPPED"}</b>
       </span>
       <span className="scanfx-now">
         <span className="eyebrow">NOW</span>
@@ -73,7 +74,7 @@ export function ScanStrip({ running, subjects, events, quotes, quotesLabel = "qu
         <span><i>{quotesLabel}</i><b>{fmt.num(q, 0)}</b></span>
         <span><i>{poolLabel}</i><b>{fmt.num(pools, 0)}</b></span>
         <span><i>最新区块</i><b>{fmt.num(block, 0)}</b></span>
-        <span><i>扫描延迟</i><b>{lat} ms</b></span>
+        <span><i>{latencyLabel}</i><b>{lat} ms</b></span>
       </span>
       <span className={`scanfx-event${fading ? " is-out" : ""}`}>
         <span className={`dot ${DOT[e.tone]}`} />

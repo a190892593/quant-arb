@@ -38,6 +38,23 @@ async fn main() -> anyhow::Result<()> {
             let state = AppState::new(cfg.clone(), workspace.clone(), db)?;
             engine::seed::restore(&state).await?;
             engine::seed::seed_inventory(&state).await?;
+            // 真实链自检：完成一次链上发现与状态同步，失败直接报错。
+            let synced = {
+                let mut feed = state.live.lock().await;
+                feed.sync().await
+            };
+            match synced {
+                Ok(data) => {
+                    tracing::info!(
+                        "链上同步成功 block={} pools={} health_ok={}",
+                        data.head_block,
+                        data.pools.len(),
+                        data.health.ok
+                    );
+                    *state.market.write().await = data;
+                }
+                Err(e) => anyhow::bail!("真实链同步失败: {e}"),
+            }
             let health = engine::scanner::health_json(&state).await;
             let ledger = state.ledger.lock().await;
             println!(
@@ -87,6 +104,11 @@ async fn main() -> anyhow::Result<()> {
     engine::seed::restore(&state).await?;
     engine::seed::seed_inventory(&state).await?;
 
+    // 真实链同步任务（扫描停止时也持续刷新，保证机会时效）
+    let _feed = engine::spawn_feed(state.clone());
+    let _discovery = engine::spawn_discovery(state.clone());
+    // M2（REVM 分叉复核）后台任务：与扫描循环解耦。
+    let _m2 = engine::scanner::spawn_m2(state.clone());
     // 启动扫描任务（默认不自动 RUNNING，需要操作者显式启动）
     let _scanner = engine::scanner::spawn(state.clone());
 

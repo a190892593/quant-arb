@@ -18,6 +18,7 @@
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -26,7 +27,7 @@ use crate::domain::dex_scan::{
     GasEstimate, GraphStats, RouteFingerprints, RouteLegRecord, RouteScanRecord,
     ScanRunStats, SimulationOutcome,
 };
-use crate::domain::market::{DataQuality, DexRoute, ModelLevel, RiskViolation, RouteLeg};
+use crate::domain::market::{DataQuality, DexRoute, ModelLevel, PoolKind, RiskViolation, RouteLeg};
 use crate::domain::money::{bps_of, bps_of_dec, q8, round_step_down};
 use crate::domain::opportunity::{FundingSource, InventoryNeed, Opportunity};
 use crate::domain::plan::fnv1a_64;
@@ -66,6 +67,10 @@ pub struct DexScanParams {
     pub max_hops: usize,
     pub max_pools: usize,
     pub max_candidates: usize,
+    /// 单轮最多完整定价多少条候选（防止上万条路线拖垮扫描周期）。
+    pub max_evaluate: usize,
+    /// 定价阶段硬预算（毫秒）。
+    pub max_evaluate_ms: u64,
     pub max_visits: u64,
     pub max_elapsed_ms: u64,
 
@@ -96,14 +101,16 @@ impl Default for DexScanParams {
             flash_fee_bps: Decimal::from(5),
             flash_provider: "aave-v3".into(),
             priority_fee_usd: Decimal::new(5, 2),
-            delay_reserve_bps: Decimal::from(8),
-            mev_reserve_bps: Decimal::from(8),
+            delay_reserve_bps: Decimal::ZERO,
+            mev_reserve_bps: Decimal::ZERO,
             profit_discount_pct: Decimal::from(50),
             ttl_sec: 30,
             min_hops: 2,
             max_hops: 5,
             max_pools: 5,
             max_candidates: 100_000,
+            max_evaluate: 800,
+            max_evaluate_ms: 1_200,
             max_visits: 200_000,
             max_elapsed_ms: 250,
             min_input_usd: Decimal::from(50),
@@ -124,6 +131,7 @@ impl Default for DexScanParams {
                 Decimal::from(1_000),
                 Decimal::from(2_500),
                 Decimal::from(5_000),
+                Decimal::from(7_500),
                 Decimal::from(10_000),
             ],
         }
@@ -152,6 +160,8 @@ impl DexScanParams {
         p.max_hops = d.max_hops.max(p.min_hops).min(8);
         p.max_pools = d.max_pools.max(p.min_hops);
         p.max_candidates = d.max_candidates;
+        p.max_evaluate = d.max_evaluate;
+        p.max_evaluate_ms = d.max_evaluate_ms;
         p.max_visits = d.max_visits;
         p.max_elapsed_ms = d.max_elapsed_ms;
         p.min_input_usd = dec_f64(d.min_input_usd);
@@ -184,6 +194,7 @@ impl DexScanParams {
 #[derive(Clone, Debug)]
 pub struct CachedRoute {
     pub route_id: String,
+    pub chain_id: u64,
     pub start_token: String,
     pub edges: Vec<HopEdge>,
     pub fingerprints: RouteFingerprints,
@@ -200,18 +211,43 @@ pub struct MultiHopCache {
     pool_index: HashMap<String, Vec<usize>>,
     topology_sig: String,
     last_full_scan_block: u64,
-    pool_seen: HashMap<String, u64>,
+    pool_seen: HashMap<String, (u64, u64)>,
     last_scan_at: Option<DateTime<Utc>>,
     last_stats: Option<ScanRunStats>,
     /// 最近一次全量搜索的访问量（增量轮次沿用，便于展示搜索规模）。
     last_search_visits: u64,
+    /// 定价轮转游标：每轮从上次结束位置继续，避免固定前 N 条造成饥饿。
+    eval_cursor: usize,
+}
+
+/// 池状态签名：价格量化到 1bp、深度粗粒度，用于增量扫描的变更检测。
+fn pool_state_sig(rt: &crate::dex::PoolRuntime) -> (u64, u64) {
+    match rt.pool.kind {
+        PoolKind::UniswapV3 => {
+            let sqrt = rt.state.sqrt_price_x96;
+            if sqrt == 0 {
+                return (0, 0);
+            }
+            let p = (sqrt as f64) / 2f64.powi(96);
+            let bp = (p * p * 10_000.0).round().max(0.0) as u64;
+            (bp, (rt.state.liquidity >> 32) as u64)
+        }
+        _ => {
+            let r0 = rt.state.reserve0.to_f64().unwrap_or(0.0);
+            let r1 = rt.state.reserve1.to_f64().unwrap_or(0.0);
+            if r0 <= 0.0 {
+                return (0, 0);
+            }
+            let bp = ((r1 / r0) * 10_000.0).round().max(0.0) as u64;
+            (bp, (r0 * 100.0) as u64)
+        }
+    }
 }
 
 impl MultiHopCache {
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn is_empty(&self) -> bool {
         self.routes.is_empty()
     }
@@ -261,7 +297,8 @@ impl MultiHopCache {
     ) {
         self.routes = candidates.into_iter().map(|c| {
             CachedRoute {
-                route_id: route_id_of(&c.fingerprints.directed),
+                route_id: route_id_of(c.chain_id, &c.fingerprints.directed),
+                chain_id: c.chain_id,
                 start_token: c.start_token,
                 edges: c.edges,
                 fingerprints: c.fingerprints,
@@ -286,18 +323,18 @@ impl MultiHopCache {
         let mut out = HashSet::new();
         for rt in view.pools.all() {
             let seen = self.pool_seen.get(&rt.pool.pool_id).copied();
-            if seen != Some(rt.state.block_number) {
+            if seen != Some(pool_state_sig(rt)) {
                 out.insert(rt.pool.pool_id.clone());
             }
         }
         out
     }
 
-    /// 记录本轮看到的池区块号与扫描时间。
+    /// 记录本轮池状态签名（价格按 1bp 量化，深度按粗粒度），块号变化但价格未动不算变更。
     pub fn note_pools(&mut self, view: &MarketView<'_>, now: DateTime<Utc>) {
         for rt in view.pools.all() {
             self.pool_seen
-                .insert(rt.pool.pool_id.clone(), rt.state.block_number);
+                .insert(rt.pool.pool_id.clone(), pool_state_sig(rt));
         }
         self.last_scan_at = Some(now);
     }
@@ -317,8 +354,8 @@ impl MultiHopCache {
     }
 }
 
-fn route_id_of(directed: &str) -> String {
-    format!("route_{directed}")
+fn route_id_of(chain_id: u64, directed: &str) -> String {
+    format!("route_{chain_id}_{directed}")
 }
 
 /// 一次扫描的输出。
@@ -448,7 +485,32 @@ pub fn scan(
     let mut routes_out: Vec<RouteScanRecord> = Vec::new();
     let mut opportunities: Vec<Opportunity> = Vec::new();
 
-    for &idx in &to_quote {
+    // 定价阶段也需要硬预算：候选可能上万条，不能只给枚举加 250ms 超时。
+    let eval_started = Instant::now();
+    let eval_budget = std::time::Duration::from_millis(params.max_evaluate_ms.max(50));
+    let mut evaluated = 0usize;
+    let mut attempted: HashSet<usize> = HashSet::new();
+    let total = to_quote.len();
+    let start_at = if total == 0 { 0 } else { cache.eval_cursor % total };
+    for step in 0..total {
+        if evaluated >= params.max_evaluate {
+            stats.truncated = true;
+            stats
+                .notes
+                .push(format!("定价数量达上限 {}，其余留待下一轮", params.max_evaluate));
+            break;
+        }
+        if eval_started.elapsed() >= eval_budget {
+            stats.truncated = true;
+            stats.notes.push(format!(
+                "定价预算 {}ms 用尽，已评估 {} 条",
+                params.max_evaluate_ms, evaluated
+            ));
+            break;
+        }
+        let idx = to_quote[(start_at + step) % total];
+        evaluated += 1;
+        attempted.insert(idx);
         let cached = cache.routes[idx].clone();
         match evaluate_route(view, params, ctx, &token_registry, &cached) {
             Some((record, opp)) => {
@@ -473,8 +535,9 @@ pub fn scan(
     }
 
     // 复用上一次报价：只更新年龄与来源，不重新报价。
+    cache.eval_cursor = if total == 0 { 0 } else { (start_at + evaluated) % total };
     for (idx, route) in cache.routes.iter().enumerate() {
-        if to_quote.contains(&idx) {
+        if attempted.contains(&idx) {
             continue;
         }
         if let Some(mut record) = route.record.clone() {
@@ -482,11 +545,23 @@ pub fn scan(
             record.quote_age_ms = record
                 .quote_age_ms
                 .max((now - route.last_quote_at).num_milliseconds());
+            // 池状态签名未变时，复用报价视为当前区块有效，避免被 block_diff 误拒。
+            record.block_number = view.head_block;
             if record.quote_age_ms > params.ttl_sec * 1_000 {
                 record.lifecycle = OpportunityLifecycle::Expired;
             }
-            if let Some(opp) = to_opportunity(view, params, ctx, &record) {
-                opportunities.push(opp);
+            match to_opportunity(view, params, ctx, &record) {
+                Some(opp) => opportunities.push(opp),
+                None => {
+                    // 复用路线拿不到机会：多半是起始 Token 无价格或腿为空，记一条诊断便于定位
+                    stats.notes.push(format!(
+                        "复用路线 {} 未生成机会：start={} price={} legs={}",
+                        record.route_id,
+                        record.start_token,
+                        view.prices.get(&record.start_token).copied().unwrap_or(Decimal::ZERO),
+                        record.legs.len()
+                    ));
+                }
             }
             routes_out.push(record);
         }
@@ -520,6 +595,7 @@ fn evaluate_route(
     let start = cached.start_token.clone();
     let start_price = view.prices.get(&start).copied().unwrap_or(Decimal::ZERO);
     if start_price <= Decimal::ZERO {
+        tracing::warn!(route = %cached.route_id, start = %start, "报价失败：缺少起始 Token 价格");
         return None;
     }
 
@@ -531,6 +607,15 @@ fn evaluate_route(
     );
     let max_amount = round_step_down(max_usd / start_price, Decimal::new(1, 8));
     if max_amount <= Decimal::ZERO || max_amount < min_amount {
+        tracing::warn!(route = %cached.route_id, capacity = %capacity_usd, max_amount = %max_amount, min_amount = %min_amount, "报价失败：容量/金额边界");
+        for e in &cached.edges {
+            if let Some(rt) = view.pools.get(&e.pool_id) {
+                let zero_for_one = e.token_in == rt.pool.token0;
+                let reserve_in = if zero_for_one { rt.state.reserve0 } else { rt.state.reserve1 };
+                let price_in = view.prices.get(&e.token_in).copied().unwrap_or(Decimal::ONE);
+                tracing::warn!(pool = %e.pool_id, token = %e.token_in, reserve = %reserve_in, price = %price_in, value = %(reserve_in * price_in), "容量来源");
+            }
+        }
         return None;
     }
 
@@ -567,7 +652,7 @@ fn evaluate_route(
                 .max_by(|a, b| a.net_usd.cmp(&b.net_usd))
                 .map(|p| p.amount_in)
         })?;
-    let priced = price_amount(
+    let priced = match price_amount(
         view,
         params,
         ctx,
@@ -575,7 +660,13 @@ fn evaluate_route(
         start_price,
         &cached.edges,
         chosen_amount,
-    )?;
+    ) {
+        Some(p) => p,
+        None => {
+            tracing::warn!(route = %cached.route_id, amount = %chosen_amount, "报价失败：price_amount 返回空");
+            return None;
+        }
+    };
 
     let block = priced.path.block_number;
     let quoted_out = priced.path.amount_out;
@@ -666,8 +757,36 @@ fn evaluate_route(
         model_level: ModelLevel::M1,
         opportunity_id: None,
         capacity_usd: max_usd,
+        size_quotes: Vec::new(),
         source: "full".into(),
     };
+
+    // 固定资金档位逐档报价（用于对比不同规模下的手续费/冲击/净利）。
+    let mut size_quotes = Vec::new();
+    for usd in &params.notional_ladder {
+        let amount = round_step_down(*usd / start_price, Decimal::new(1, 8));
+        if amount <= Decimal::ZERO || amount < min_amount || amount > max_amount {
+            continue;
+        }
+        let Some(p) = price_amount(view, params, ctx, &start, start_price, &cached.edges, amount)
+        else {
+            continue;
+        };
+        size_quotes.push(crate::domain::dex_scan::SizeQuote {
+            notional_usd: p.eval.notional_usd,
+            amount_in: amount,
+            amount_out: p.path.amount_out,
+            gross_usd: p.eval.gross_usd,
+            total_cost_usd: p.costs.total(),
+            net_usd: p.eval.net_usd,
+            net_bps: if p.eval.notional_usd > Decimal::ZERO {
+                p.eval.net_usd / p.eval.notional_usd * Decimal::from(10_000)
+            } else {
+                Decimal::ZERO
+            },
+        });
+    }
+    record.size_quotes = size_quotes;
 
     record.rejections = gate_route(
         view,
@@ -848,7 +967,7 @@ fn price_signature(view: &MarketView<'_>, edges: &[HopEdge]) -> String {
 }
 
 fn route_quality(view: &MarketView<'_>, edges: &[HopEdge]) -> DataQuality {
-    let mut worst = DataQuality::Verified;
+    let mut worst = DataQuality::High;
     let mut blocks = HashSet::new();
     for e in edges {
         let Some(rt) = view.pools.get(&e.pool_id) else {
@@ -858,16 +977,8 @@ fn route_quality(view: &MarketView<'_>, edges: &[HopEdge]) -> DataQuality {
             return DataQuality::Invalid;
         }
         blocks.insert(rt.state.block_number);
-        let age = rt.state.age_ms(view.now);
-        let q = if age > 3_000 {
-            DataQuality::Invalid
-        } else if age > 1_000 {
-            DataQuality::Low
-        } else if age > 300 {
-            DataQuality::Medium
-        } else {
-            DataQuality::High
-        };
+        // 未接 REVM/M2：实时快照最高只到 B，A 仅保留给 M2 验证。
+        let q = DataQuality::from_age(rt.state.age_ms(view.now), 8_000);
         if q.rank() > worst.rank() {
             worst = q;
         }
@@ -1185,19 +1296,30 @@ fn to_opportunity(
         created_at: record.detected_at,
     };
 
+    let strategy = if record.hops >= 3 {
+        StrategyType::DexTriple
+    } else {
+        StrategyType::DexCross
+    };
+    // 稳定机会 ID：同一策略 + 路线 + 名义金额跨周期复用，避免每轮生成新记录。
+    let id_seed = format!(
+        "{}|{}|{}",
+        strategy.as_str(),
+        route.route_id,
+        record.notional_usd
+    );
+    let opportunity_id = format!("opp_{:016x}", crate::domain::plan::fnv1a_64(&id_seed));
+
     Some(Opportunity {
-        opportunity_id: crate::domain::new_id("opp"),
-        strategy_type: if record.hops >= 3 {
-            StrategyType::DexTriple
-        } else {
-            StrategyType::DexCross
-        },
+        opportunity_id,
+        strategy_type: strategy,
         chain_id: view.chain_id,
         chain_name: view.chain_name.clone(),
         dex_route: Some(route),
         cex_exchange: None,
         cex_symbol: None,
         direction: None,
+        m2: None,
         target_notional: record.notional_usd,
         target_qty: record.amount_in,
         required_dex_inventory: vec![InventoryNeed {
@@ -1292,6 +1414,8 @@ mod tests {
                 address: format!("0x{id}"),
                 token0: t0.into(),
                 token1: t1.into(),
+                decimals0: 0,
+                decimals1: 0,
                 fee_bps: 30,
                 tick_spacing: None,
                 tvl_usd: dec("5000000"),

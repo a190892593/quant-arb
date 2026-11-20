@@ -24,10 +24,12 @@ use crate::domain::dex_scan::{
 use crate::domain::execution::ExecutionRecord;
 use crate::domain::market::{Instrument, Token};
 use crate::domain::opportunity::Opportunity;
+use crate::domain::types::OppStatus;
 use crate::domain::report::ScannerStatus;
 use crate::domain::risk::{ControlState, RiskEvent};
 use crate::domain::types::StrategyType;
-use crate::feed::demo::DemoMarket;
+use crate::feed::live::LiveFeed;
+use crate::feed::MarketData;
 use crate::ledger::LedgerEngine;
 use crate::paper::{PaperEngine, PaperParams};
 use crate::risk::RiskEngine;
@@ -68,7 +70,10 @@ pub struct AppState {
     pub db: Db,
     pub risk: Arc<RwLock<RiskEngine>>,
     pub ledger: Arc<Mutex<LedgerEngine>>,
-    pub market: Arc<RwLock<DemoMarket>>,
+    /// 真实链行情快照（由 feed 任务持续刷新）。
+    pub market: Arc<RwLock<MarketData>>,
+    /// 真实链同步器（RPC 发现/状态/价格）。
+    pub live: Arc<Mutex<LiveFeed>>,
     pub scanner: Arc<RwLock<ScannerStatus>>,
     pub opportunities: Arc<RwLock<Vec<Opportunity>>>,
     pub executions: Arc<RwLock<Vec<ExecutionRecord>>>,
@@ -80,8 +85,14 @@ pub struct AppState {
     pub stats: Arc<RwLock<RuntimeStats>>,
     pub paper: Arc<Mutex<PaperEngine>>,
     pub strategy: Arc<StrategyEngine>,
-    /// 多跳 DEX 扫描参数（由配置派生）。
-    pub dex_params: Arc<DexScanParams>,
+    /// 多跳 DEX 扫描参数（可在线修改，持久化在 search_config.json）。
+    pub dex_params: Arc<RwLock<DexScanParams>>,
+    /// 搜索配置：Token 白/黑名单 + 可编辑参数。
+    pub search: Arc<tokio::sync::Mutex<crate::search_config::SearchConfig>>,
+    /// 全链自动发现状态。
+    pub discovery: Arc<RwLock<crate::dex::discovery::DiscoveryStatus>>,
+    /// 扫描数据源注册表（Key/启用/优先级/策略）。
+    pub sources: Arc<tokio::sync::Mutex<crate::source_config::SourceConfig>>,
     /// 路线集合 + 池 → 路线反向索引（增量扫描）。
     pub dex_cache: Arc<Mutex<MultiHopCache>>,
     /// 最近一轮的路线记录（API / 前端）。
@@ -90,6 +101,8 @@ pub struct AppState {
     pub dex_scan_stats: Arc<RwLock<ScanRunStats>>,
     /// 最近模拟结果（M1/M3，API 查询与审计）。
     pub simulations: Arc<RwLock<Vec<SimulationOutcome>>>,
+    /// M2（REVM 分叉）复核证据，按 route_id 保存，跨扫描周期复用。
+    pub m2_evidence: Arc<RwLock<HashMap<String, crate::domain::market::M2Evidence>>>,
     /// 手工触发一次扫描的开关（API `/scanner/scan`）。
     pub scan_now: Arc<tokio::sync::Notify>,
 }
@@ -101,7 +114,21 @@ impl AppState {
         let ledger = Arc::new(Mutex::new(LedgerEngine::new(
             Decimal::from_f64_retain(config.paper.start_equity).unwrap_or(Decimal::from(5000)),
         )));
-        let market = Arc::new(RwLock::new(DemoMarket::new(&config, config.feed.seed)));
+        if config.feed.mode != "live" {
+            anyhow::bail!(
+                "运行时只支持真实链行情（feed.mode = \"live\"）；演示行情仅供单元测试构造，不允许用于扫描或展示"
+            );
+        }
+        let search_cfg = crate::search_config::SearchConfig::load(&config, &workspace);
+        let source_cfg = crate::source_config::SourceConfig::load(&workspace);
+        let mut feed_cfg = config.clone();
+        feed_cfg.live.tokens = search_cfg.token_configs();
+        let search = Arc::new(tokio::sync::Mutex::new(search_cfg.clone()));
+        let live_feed = LiveFeed::new(&feed_cfg, search.clone(), workspace.clone())
+            .map_err(|e| anyhow::anyhow!("初始化真实链行情失败: {e}"))?;
+        let chain = live_feed.chain.clone();
+        let market = Arc::new(RwLock::new(MarketData::empty(chain)));
+        let live = Arc::new(Mutex::new(live_feed));
         let paper = Arc::new(Mutex::new(PaperEngine::new(
             config.feed.seed ^ 0xA5A5,
             crate::paper::scenario::Scenario::default(),
@@ -111,8 +138,13 @@ impl AppState {
             },
         )));
         let strategy = Arc::new(StrategyEngine::new());
-        let dex_params = Arc::new(DexScanParams::from_config(&config));
+        let mut dex_params = DexScanParams::from_config(&config);
+        search_cfg.params.apply(&mut dex_params);
+        let dex_params = Arc::new(RwLock::new(dex_params));
 
+        let mut ds = crate::dex::discovery::DiscoveryStatus::default();
+        ds.enabled = config.discovery.enabled;
+        ds.total_pools = crate::dex::discovery::load_pools(&workspace).len();
         let state = Arc::new(Self {
             config,
             workspace,
@@ -120,6 +152,7 @@ impl AppState {
             risk,
             ledger,
             market,
+            live,
             scanner: Arc::new(RwLock::new(ScannerStatus::default())),
             opportunities: Arc::new(RwLock::new(Vec::new())),
             executions: Arc::new(RwLock::new(Vec::new())),
@@ -132,11 +165,15 @@ impl AppState {
             paper,
             strategy,
             dex_params,
+            search,
+            discovery: Arc::new(RwLock::new(ds)),
+            sources: Arc::new(tokio::sync::Mutex::new(source_cfg)),
             dex_cache: Arc::new(Mutex::new(MultiHopCache::new())),
             dex_routes: Arc::new(RwLock::new(Vec::new())),
             dex_graph: Arc::new(RwLock::new(GraphStats::default())),
             dex_scan_stats: Arc::new(RwLock::new(ScanRunStats::default())),
             simulations: Arc::new(RwLock::new(Vec::new())),
+            m2_evidence: Arc::new(RwLock::new(HashMap::new())),
             scan_now: Arc::new(tokio::sync::Notify::new()),
         });
         Ok(state)
@@ -177,9 +214,29 @@ impl AppState {
 
     pub async fn push_opportunity(&self, opp: Opportunity) {
         let mut list = self.opportunities.write().await;
-        list.insert(0, opp.clone());
-        if list.len() > 500 {
-            list.truncate(500);
+        // 稳定 ID：同一路线/金额只保留一条，避免每轮扫描产生重复记录。
+        if let Some(slot) = list
+            .iter_mut()
+            .find(|o| o.opportunity_id == opp.opportunity_id)
+        {
+            *slot = opp;
+            return;
+        }
+        list.insert(0, opp);
+        // 保留窗口按「状态优先」淘汰：先丢最旧的拒单样本，
+        // 保证可执行 / 观察中的机会在 TTL 内始终能被前端看到。
+        while list.len() > 500 {
+            let victim = list
+                .iter()
+                .rposition(|o| !matches!(o.status, OppStatus::Actionable | OppStatus::Watch));
+            match victim {
+                Some(i) => {
+                    list.remove(i);
+                }
+                None => {
+                    list.pop();
+                }
+            }
         }
     }
 
@@ -198,4 +255,80 @@ impl AppState {
             list.truncate(1_000);
         }
     }
+}
+
+/// 启动真实链同步任务：持续把最新池状态/价格写入 MarketData 快照。
+///
+/// 同步失败时只降低健康度并保留上一份真实快照，不生成替代数据；
+/// 扫描器会依据报价年龄/区块差拒绝过期机会。
+pub fn spawn_feed(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {    tokio::spawn(async move {
+        let interval = std::time::Duration::from_millis(state.config.live.refresh_ms.max(500));
+        // 单次同步的硬超时：公共 RPC 抖动或大批量调用不能无限期阻塞行情刷新。
+        let budget = interval.saturating_mul(10).max(std::time::Duration::from_secs(30));
+        loop {
+            let result = {
+                let mut feed = state.live.lock().await;
+                match tokio::time::timeout(budget, feed.sync()).await {
+                    Ok(r) => r,
+                    Err(_) => Err(format!("链上同步超时（>{budget:?}），已保留上一份快照")),
+                }
+            };
+            let ok = result.is_ok();
+            match result {
+                Ok(data) => {
+                    let block = data.head_block;
+                    let pools = data.pools.len();
+                    let errors = data.health.last_error.clone();
+                    *state.market.write().await = data;
+                    if let Some(e) = errors {
+                        tracing::warn!("链上同步部分失败: {e}");
+                    }
+                    tracing::debug!("链上同步完成 block={block} pools={pools}");
+                }
+                Err(e) => {
+                    tracing::error!("链上同步失败: {e}");
+                    let mut m = state.market.write().await;
+                    m.health.ok = false;
+                    m.health.last_error = Some(e);
+                    m.health.last_sync = Some(Utc::now());
+                }
+            }
+            // 失败时退避到 4×间隔，避免对限流端点持续施压。
+            let sleep_for = if ok { interval } else { interval.saturating_mul(4) };
+            tokio::time::sleep(sleep_for).await;
+        }
+    })
+}
+
+/// 全链池/Token 自动发现循环。
+pub fn spawn_discovery(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let cfg = state.config.discovery.clone();
+        if !cfg.enabled {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        loop {
+            {
+                let mut s = state.discovery.write().await;
+                s.running = true;
+                s.enabled = true;
+            }
+            let result = crate::dex::discovery::scan_once(&state).await;
+            {
+                let mut s = state.discovery.write().await;
+                s.running = false;
+                match result {
+                    Ok(st) => *s = st,
+                    Err(e) => {
+                        s.message = format!("discovery failed: {e}");
+                        s.last_run_at = Utc::now().to_rfc3339();
+                        s.total_pools = crate::dex::discovery::load_pools(&state.workspace).len();
+                        s.enabled = true;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(cfg.interval_sec.max(120))).await;
+        }
+    })
 }

@@ -302,6 +302,7 @@ pub fn to_opportunity(
         data_quality: route_quality(view, cand),
         model_level: ModelLevel::M1,
         confidence: "M1 精确池状态逐跳报价（未做 EVM 模拟）".into(),
+        m2: None,
         quote_timestamp: now,
         quote_block_number: cand.path.block_number,
         book_age_ms: 0,
@@ -325,7 +326,7 @@ pub fn to_opportunity(
 }
 
 fn route_quality(view: &MarketView<'_>, cand: &DexCandidate) -> DataQuality {
-    let mut worst = DataQuality::Verified;
+    let mut worst = DataQuality::High;
     for e in &cand.edges {
         let Some(rt) = view.pools.get(&e.pool_id) else {
             return DataQuality::Invalid;
@@ -333,16 +334,8 @@ fn route_quality(view: &MarketView<'_>, cand: &DexCandidate) -> DataQuality {
         if !rt.pool.verified || !rt.pool.execution_allowed {
             return DataQuality::Invalid;
         }
-        let age = rt.state.age_ms(view.now);
-        let q = if age > 3_000 {
-            DataQuality::Invalid
-        } else if age > 1_000 {
-            DataQuality::Low
-        } else if age > 300 {
-            DataQuality::Medium
-        } else {
-            DataQuality::High
-        };
+        // 未接 REVM/M2：实时快照最高只到 B。
+        let q = DataQuality::from_age(rt.state.age_ms(view.now), 8_000);
         if q.rank() > worst.rank() {
             worst = q;
         }

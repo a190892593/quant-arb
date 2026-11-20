@@ -30,7 +30,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\test.ps1           # 全部测试
 ```
 
-- 界面：<http://127.0.0.1:8791/>（后端同时托管 `web/` 静态文件，前后端同源）
+- 界面：<http://127.0.0.1:8791/>（React 构建产物在 `ui/`，由后端同源托管）
 - API：`http://127.0.0.1:8791/api/*`，WebSocket：`ws://127.0.0.1:8791/ws`
 - 端口默认 8791（本机 8787 已被其他服务占用）；可用 `ARBX_PORT` 覆盖
 - 日志：`data/server.out.log` / `data/server.err.log`
@@ -44,7 +44,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
 | PRD 交付项 | 实现位置 | 状态 |
 |---|---|---|
-| 项目配置、链注册、协议注册 | `backend/src/config.rs`、`feed/demo.rs`、`db/` | 完成 |
+| 项目配置、链注册、协议注册 | `backend/src/config.rs`、`feed/live.rs`（真实链）、`feed/demo.rs`（仅单测）、`db/` | 完成 |
 | DEX 池状态与报价 | `backend/src/dex/`（V2 / V3 集中流动性 / StableSwap / Weighted） | 完成 |
 | DEX 多池多跳扫描（v2） | `backend/src/dex/` + `strategy/dex_scan.rs`（准入 / 多重图 / 有界 DFS / 指纹 / 投入优化 / M1+M3 / 增量） | 完成（M2 未接入，见 §7） |
 | CEX 公共行情与订单簿 | `backend/src/cex/`（快照+增量、缺口失效、深度成交、Binance 只读适配） | 完成 |
@@ -56,7 +56,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 | 策略账本与资金管理 | `backend/src/ledger/`（10 类账户、追加式流水、库存、对账、绩效） | 完成 |
 | 风控及熔断中心 | `backend/src/risk/`（49 项参数、覆盖只允许更严格、熔断窗口） | 完成 |
 | 执行合约设计与测试规范 | `doc/执行合约详细设计 v1.0.md`（设计层交付） | 未编码（见 §7） |
-| 前端仪表盘 | `web/`（13 视图 + 抽屉，已接入 `/api`） | 完成 |
+| 前端仪表盘 | `frontend/`（React 19 + TS + Vite，构建后 `npm run publish` 到 `ui/`） | 完成 |
 | 本地启动/停止/备份/恢复 | `scripts/` | 完成 |
 | 审计与 Paper 报告 | `/api/audit/*`、`/api/paper/performance`、`arb-backend audit` | 完成 |
 
@@ -137,8 +137,9 @@ feed.tick → MarketView → StrategyEngine.scan
 ## 6. 前端
 
 实时界面是 `frontend/`（React 19 + TypeScript + Vite，契约见 `DESIGN.md`），构建产物由后端
-同源托管（`ui/`，默认 `server.ui_dir = "ui"`）。前端每 2.5s 轮询 `/api/*` 并映射为领域模型，
+同源托管（`ui/`，默认 `server.ui_dir = "ui"`）。前端每 3s 轮询 `/api/*` 并映射为领域模型，
 顶栏显示 `LIVE API`；后端不可达时明确降级为离线状态，不伪造数据。
+构建与发布：`cd frontend && npm ci && npm run publish`（`tsc -b` + `vite build` + 复制到 `ui/`）。
 
 本次新增「路由搜索中心」（`#/routes`）：展示图层统计（池/边/Token）、候选路线、重算/复用、
 搜索耗时与截断标记，以及每条路线的逐腿明细、指纹、投入金额优化曲线、M1/M3 模拟结果和拒绝原因。
@@ -154,28 +155,111 @@ feed.tick → MarketView → StrategyEngine.scan
    `/api/contract/status` 明确返回 `deployed: false`。
 3. **历史数据**：未导入真实历史 L2 盘口与归档区块。`audit` 只审计本机已记录的 Paper
    数据，样本不足直接给 `WATCH`，不编造缺失区间。
-4. **行情**：默认 `feed.mode = "demo"`，合成市场用于离线验收全链路并刻意制造价格错位；
-   它比主网常态更"有机会"，**Paper 盈利不能推导为实盘收益**。
-   实时公共行情适配器 `cex/binance.rs` 已实现（只读、无 API Key、无下单），
-   但尚未作为默认扫描源。
+4. **行情**：`feed.mode = "live"` 为唯一运行模式，`demo` 只能在单元测试中直接构造，
+   服务启动会拒绝 `demo`。实时源 = Arbitrum 主网 RPC（`eth_call`：V2 `getReserves`、
+   V3 `slot0 + liquidity`、ERC20 `balanceOf`）+ Binance 公共盘口（depth / exchangeInfo，只读）。
+   默认登记 11 个已验证池（Uniswap V3/V2、Sushi V2），每 2s 刷新；公共 RPC 单次约 1–3s，
+   因此 DEX 报价年龄预算放宽到 8s、盘口同样 8s（原基线 3s/250ms 在公共 RPC 下不可达，
+   见 `risk/catalog.rs` 注释）。`VERIFIED(A)` 只由 M2（REVM 复核对通过）产生；
+   未做 M2 的实时机会最高为 `High(B)`。
+   未接入真实成交：执行仍是 Paper，`paper.auto_execute = false`，不会自动下单。
 5. **编译目录**：本机 DSH 会话对工作区路径附加文件系统过滤，`cl.exe` 在工作区内编译
    C 依赖会失败，因此 `backend/.cargo/config.toml` 把 target 指向 `D:/arbx-build/quant-arb`。
    迁移机器时可删除该配置恢复默认目录。
 6. **未做的部分**：永续合约/杠杆、提币与跨链桥、多交易所实盘、V4/Hook 池、
    ClickHouse/Redis、逐笔人工审批（PRD 明确不做）。
-7. **M2 / REVM 未接入**：本机只有 M1 状态一致性与 M3 参数化压力模拟，没有本地 EVM 分叉执行，
-   因此不产生 VERIFIED；M2 请求显式返回 `UNAVAILABLE`。M3 不是链上竞争回放，
-   不能替代历史审计。
+7. **M2 / REVM 已接入**：`evm/fork.rs` 按报价区块从 RPC 读取账号/代码/存储并缓存，
+   `evm/revm_sim.rs` 用 REVM 本地执行，`strategy/m2.rs` 以 QuoterV2
+   `quoteExactInput(bytes,uint256)` 重放整条全 V3 路径，与 M1 输出比较：
+   - 偏差 ≤ `m2.tolerance_bps`（默认 50 bps）→ 机会升级为 `M2` + `VERIFIED(A)`；
+   - 偏差过大或回滚 → 保留 M1，追加 `m2_mismatch` 硬拒绝与证据。
+   M2 是独立后台任务（`scanner::spawn_m2`），默认每 60s 复核一条净利最高的全 V3 路径，
+   REVM 分叉读取约 10–30s，不阻塞 1.5s 的行情扫描循环。
+   M2 专用 RPC `m2.rpc` 必须支持按历史区块读存储（publicnode 会 403，默认用 arb1）。
+   `/api/system/status` 的 `simulation` 返回
+   `{revm:true, m2_available:true, max_model:"M2", stress_model:"M3", verified_reserved_for:"M2"}`。
+   M3 不是链上竞争回放，不能替代历史审计。
 8. **历史回放未实现**：未接入归档区块与区块内交易顺序重建，历史审计仍只统计本机已记录数据。
 9. **容量与行情**：单笔容量按「单池一侧储备价值 × `max_pool_share_pct`」保守估算；
-   默认仍是合成行情，真实 RPC/WebSocket Pool 发现与多链注册表尚未接入。
+   行情为 Arbitrum 主网 + Binance 公共接口（M1 只读），未接 WebSocket 增量盘口与多链池发现，
+   公共 RPC 延迟导致的报价年龄在 `feed_health` / `block_age_ms` 中如实展示。
 10. **版本控制**：仓库已初始化，远端为 <https://github.com/a190892593/quant-arb.git>；
     `.gitignore` 排除构建产物、本地数据库与前端依赖。
+11. **套利发现模式（当前配置）**：为了在真实市场中产出可执行样本，`[dex_engine]`
+    把 `min_profit` 下调到 0.01 bps / $0，准备金（delay/hedge/rebalance/mev）设为 0，
+    仅保留 0.5 bps 滑点；CEX taker 按 BNB 抵扣后的 7.5 bps 计。
+    这不是保守执行口径：M3 压力（25 bps 不利变动）仍会给出负净利，实盘前必须恢复
+    `risk/catalog.rs` 的保守门槛与准备金。池表里的 Uniswap V3 `fee_bps` 已按
+    “fee 单位 ÷100” 归一化（500→5、3000→30、10000→100），并去除重复地址，
+    否则会出现 5%/30% 手续费的重复池，导致路由绕行、错过 1 跳机会。
+    期初库存额外配置 0.02 BTC / 0.02 WBTC（DEX+CEX 两侧），使 CEX–DEX 双向可执行；
+    Paper 账户已重置，旧数据在 `backups/` 中。
+12. **搜索配置与 Token 注册表**：`data/search_config.json` 持久化 Token 白/黑名单与
+    可编辑搜索参数；`GET/PUT /api/search/config` 读写，`POST /api/search/tokens`
+    做白名单/黑名单/删除。参数保存后**即时生效**（扫描器每轮读取
+    `dex_params`），Token 列表变更需重启后端重建 feed。
+    配置里引用了未登记 Token 的池会在首次同步时通过 `token0()/token1()` 读取地址，
+    再用 `symbol()/decimals()` 自动登记为白名单（`source=auto`）；黑名单 Token 会被跳过。
+    前端 `#/routes` 页面提供「搜索配置」面板：10 个可编辑参数 + Token 表 + 新增/黑名单/删除。
+    自动登记示例：配置中的 `WETH/LINK 0.3%` 池在启动后自动登记 LINK 并纳入刷新。
+13. **全链池/Token 自动发现**：`[discovery]` 控制开关、间隔、TVL 门槛与池上限。
+    后台任务每 10 分钟从 GeckoTerminal 公共 API 拉取 Arbitrum 高 TVL 池候选，再回到链上
+    校验 `token0/token1/fee`、余额与 `slot0`，用池内价格推导未知 Token 的 USD 价格并计算 TVL；
+    通过后自动写入 `data/discovered_pools.json` 与 `data/search_config.json`（source=discovered），
+    feed 每 30 次同步热加载，无需重启。
+    API：`GET /api/discovery/status`、`POST /api/discovery/scan`；UI 在「池与 Token」页顶部。
+    当前实现：41 个发现池、19 个白名单 Token（AAVE/UNI/PENDLE/cbBTC/tBTC 等 10 个为自动发现），
+    feed 活跃池从 15 增加到 22。限制：聚合器与公共 RPC 有速率限制（429 时本轮跳过、保留已有结果），
+    V2 风格池（无 `slot0`）暂不纳入；TVL 做过上界过滤（>1e9 USD 视为精度异常丢弃）。
+14. **聚合器 API Key（可选，免费档足够）**：
+    - **GeckoTerminal 公共 API**：无需 Key，约 30 次/分（当前默认），文档
+      <https://www.geckoterminal.com/dex-api>。
+    - **CoinGecko Onchain Demo**：免费 Key，约 10,000 次/月、100 次/分，需署名；
+      在 <https://www.coingecko.com/en/developers/dashboard> 注册后创建 Demo Key，
+      价格页 <https://www.coingecko.com/en/api/pricing>（付费 Basic 起约 $129/月，以官网为准）。
+      配置方式：`[discovery] coingecko_api_key = "CG-..."`，或环境变量
+      `COINGECKO_API_KEY`；有 Key 时自动改走
+      `https://api.coingecko.com/api/v3/onchain/networks/arbitrum/pools`
+      并带 `x-cg-demo-api-key` 请求头，429 时退避重试。
+    - **DexScreener**：完全免 Key（约 60–300 次/分），文档
+      <https://docs.dexscreener.com/api/reference>，可作为后续备选源。
+    - **The Graph Studio**：免费约 10 万次查询/月，<https://thegraph.com/studio/>，
+      适合直接查 Uniswap V3 子图。
+15. **扫描数据源配置页**：左侧菜单「扫描 → 扫描数据源配置」（`#/sources`）。
+    后端注册表 `data/source_config.json`，`GET/PUT /api/sources` 读写；支持 27 个数据源
+    （GeckoTerminal×4、CoinGecko×2、DexScreener、DefiLlama、GoPlus、Honeypot、Pyth、
+    Curve、Balancer、CoinPaprika、CryptoCompare、Moralis、Covalent、The Graph、
+    Blockscout、Arbiscan、Sourcify、Alchemy/Infura/QuickNode/Ankr/公共 RPC、Binance）。
+    页面可启停、调优先级/限速、填写 Key（返回脱敏，`****` 表示不修改）并选择切换策略：
+    `round_robin` / `priority` / `random`；发现任务每轮读取，保存即生效。
+    Key 只保存在本机，不会上传。
+16. **免费优先组合（当前默认）**：数据源页默认只启用 14 个免 Key 源
+    （GeckoTerminal×4、DexScreener、DefiLlama、Blockscout、Honeypot、Pyth、Curve、
+    Balancer、Sourcify、公共 RPC、Binance 公共行情），需要 Key 的 13 个源默认关闭，
+    填好 Key 后才可手动启用；策略 `round_robin`、间隔 1800s，每轮只打一个源。
+    链上读取使用免费 RPC 池 `rpc_pool`（arb1 主 + publicnode/1rpc/drpc），失败自动
+    切换并记住可用节点；不再使用已失效的 llamarpc/ankr。免费组合的代价是 RPC 延迟
+    约 1–4s，稳定但不如付费节点。
+17. **Base 链实例**：`config/base.toml` 配置档 + `instances/base` 独立工作区，
+    通过 `ARBX_PROFILE=base` 叠加到默认配置；启动脚本 `scripts/start-base.ps1`，
+    端口 **8792**、数据目录 `instances/base/data`、UI 复用仓库 `ui/`。
+    Base 核心池（Uniswap V3，地址由 Base 工厂 `getPool` 校验）：
+    WETH/USDC 5bps、WETH/USDC 30bps、DAI/USDC 1bps、USDC/USDbC 1bps、AERO/WETH 30bps；
+    另接入 **Aerodrome 波动池**（Velodrome V2 风格 constant product）：
+    WETH/USDC、USDC/AERO、WETH/AERO（stable 池暂不纳入，当前报价器不支持稳定曲线）。
+    Token：USDC/WETH/DAI/USDbC/AERO。RPC 池 `mainnet.base.org + publicnode/drpc`。
+    Base 自动发现已开启（`[discovery] enabled = true`，仅接受已知 V3 协议候选；
+    未识别 DEX 直接跳过，避免假 Token 入白名单）。M2 仍关闭。
+    当前 Base 实例：9 个活跃池、16 个白名单 Token、feed ≈ 1.7s、scanner 产出含 AERO 的路线。
+    Arbitrum 实例仍在 8791；Base 实例独立运行，互不影响数据库与纸面账本。
+
+
+
 
 ## 8. 测试
 
 ```
-cargo test          # 212 个测试（202 lib + 10 集成）
+cargo test          # 216 个测试（206 lib + 10 集成）
 ```
 
 - 领域层：金额精度、枚举契约、计划哈希、Decimal JSON 形状。

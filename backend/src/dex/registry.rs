@@ -287,6 +287,8 @@ mod tests {
                 address: "0xp1".into(),
                 token0: "USDC".into(),
                 token1: "WETH".into(),
+                decimals0: 0,
+                decimals1: 0,
                 fee_bps: 30,
                 tick_spacing: None,
                 tvl_usd: dec(tvl),

@@ -232,6 +232,8 @@ mod tests {
             address: format!("0x{id}"),
             token0: t0.to_string(),
             token1: t1.to_string(),
+            decimals0: 0,
+            decimals1: 0,
             fee_bps: 30,
             tick_spacing: None,
             tvl_usd: dec("1000000"),

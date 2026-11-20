@@ -5,7 +5,8 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use super::market::{
-    CostBreakdown, DataQuality, DexRoute, ModelLevel, ProfitScenario, RiskScore, RiskViolation,
+    CostBreakdown, DataQuality, DexRoute, M2Evidence, ModelLevel, ProfitScenario, RiskScore,
+    RiskViolation,
 };
 use super::types::{Direction, HedgeOrder, OppStatus, OpportunityLifecycle, StrategyType};
 
@@ -100,6 +101,10 @@ pub struct Opportunity {
     pub model_level: ModelLevel,
     /// 模拟可信度说明，例如「M2 深度成交 + 竞争模型」。
     pub confidence: String,
+
+    /// M2（REVM 分叉）复核结果；未运行时为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub m2: Option<M2Evidence>,
 
     pub quote_timestamp: DateTime<Utc>,
     pub quote_block_number: u64,
