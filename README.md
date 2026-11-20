@@ -32,7 +32,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\test.ps1           # 全部测试
 ```
 
-- 界面：<http://127.0.0.1:8791/>（React 构建产物在 `ui/`，由后端同源托管）
+- 界面：<http://127.0.0.1:8791/>（React 构建产物在 `frontend/dist/`，由后端同源托管）
 - API：`http://127.0.0.1:8791/api/*`，WebSocket：`ws://127.0.0.1:8791/ws`
 - 端口默认 8791（本机 8787 已被其他服务占用）；可用 `ARBX_PORT` 覆盖
 - 日志：`data/server.out.log` / `data/server.err.log`
@@ -58,7 +58,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 | 策略账本与资金管理 | `backend/src/ledger/`（10 类账户、追加式流水、库存、对账、绩效） | 完成 |
 | 风控及熔断中心 | `backend/src/risk/`（49 项参数、覆盖只允许更严格、熔断窗口） | 完成 |
 | 执行合约设计与测试规范 | `docs/执行合约详细设计 v1.0.md`（设计层交付） | 未编码（见 §7） |
-| 前端仪表盘 | `frontend/`（React 19 + TS + Vite，构建后 `npm run publish` 到 `ui/`） | 完成 |
+| 前端仪表盘 | `frontend/`（React 19 + TS + Vite，`npm run publish` 输出到 `frontend/dist/`） | 完成 |
 | 本地启动/停止/备份/恢复 | `scripts/` | 完成 |
 | 审计与 Paper 报告 | `/api/audit/*`、`/api/paper/performance`、`arb-backend audit` | 完成 |
 
@@ -139,9 +139,9 @@ feed.tick → MarketView → StrategyEngine.scan
 ## 6. 前端
 
 实时界面是 `frontend/`（React 19 + TypeScript + Vite，契约见 `DESIGN.md`），构建产物由后端
-同源托管（`ui/`，默认 `server.ui_dir = "ui"`）。前端每 3s 轮询 `/api/*` 并映射为领域模型，
+同源托管（`frontend/dist/`，默认 `server.ui_dir = "frontend/dist"`）。前端每 3s 轮询 `/api/*` 并映射为领域模型，
 顶栏显示 `LIVE API`；后端不可达时明确降级为离线状态，不伪造数据。
-构建与发布：`cd frontend && npm ci && npm run publish`（`tsc -b` + `vite build` + 复制到 `ui/`）。
+构建与发布：`cd frontend && npm ci && npm run publish`（`tsc -b` + `vite build`，产物在 `frontend/dist/`）。克隆后可直接执行 `.\scripts\start.ps1`，脚本会在缺产物时自动构建。
 
 本次新增「路由搜索中心」（`#/routes`）：展示图层统计（池/边/Token）、候选路线、重算/复用、
 搜索耗时与截断标记，以及每条路线的逐腿明细、指纹、投入金额优化曲线、M1/M3 模拟结果和拒绝原因。
@@ -244,7 +244,7 @@ feed.tick → MarketView → StrategyEngine.scan
     约 1–4s，稳定但不如付费节点。
 17. **Base 链实例**：`config/base.toml` 配置档 + `instances/base` 独立工作区，
     通过 `ARBX_PROFILE=base` 叠加到默认配置；启动脚本 `scripts/start-base.ps1`，
-    端口 **8792**、数据目录 `instances/base/data`、UI 复用仓库 `ui/`。
+    端口 **8792**、数据目录 `instances/base/data`、UI 复用 `frontend/dist/`。
     Base 核心池（Uniswap V3，地址由 Base 工厂 `getPool` 校验）：
     WETH/USDC 5bps、WETH/USDC 30bps、DAI/USDC 1bps、USDC/USDbC 1bps、AERO/WETH 30bps；
     另接入 **Aerodrome 波动池**（Velodrome V2 风格 constant product）：

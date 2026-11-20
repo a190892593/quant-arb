@@ -1,13 +1,14 @@
-# Build the ARBX frontend into ../ui (served by the backend as static files).
+# Build the ARBX frontend into frontend/dist (served by the backend as static files).
 # Usage: .\scripts\build-ui.ps1
 #
-# ui/ 是构建产物，不纳入版本控制；克隆仓库后执行一次本脚本即可。
-# 若 node_modules 缺失会先安装依赖（需要网络）。
+# 构建产物在 frontend/dist 内部，不再是仓库根目录的 ui/：
+# 产物不进版本库（.gitignore 已忽略 /frontend/dist/），克隆后执行一次本脚本即可。
 
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $fe = Join-Path $root 'frontend'
+$out = Join-Path $fe 'dist'
 
 if (-not (Test-Path $fe)) { throw "frontend directory not found: $fe" }
 
@@ -32,6 +33,6 @@ try {
     Pop-Location
 }
 
-$index = Join-Path $root 'ui\index.html'
-if (-not (Test-Path $index)) { throw "build finished but ui/index.html is missing" }
+$index = Join-Path $out 'index.html'
+if (-not (Test-Path $index)) { throw "build finished but frontend/dist/index.html is missing" }
 Write-Host "UI built: $index"

@@ -10,13 +10,12 @@
 dom*.html
 probe.txt
 
-# 前端依赖、构建缓存与产物（ui/ 是 vite 构建输出，由 npm run publish 生成，
+# 前端依赖、构建缓存与产物（frontend/dist 是 vite 构建输出，由 npm run publish 生成，
 # 不纳入版本控制；克隆后执行一次 npm run publish 或 .\scripts\build-ui.ps1 即可）
 /frontend/node_modules/
 /frontend/dist/
 /frontend/tsconfig.tsbuildinfo
 /frontend/*.log
-/ui/
 
 # Windows
 Thumbs.db

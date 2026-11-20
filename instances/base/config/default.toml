@@ -4,7 +4,7 @@
 host = "127.0.0.1"
 # 8787 已被本机其他服务占用，默认改?8791；可?ARBX_PORT 覆盖
 port = 8791
-ui_dir = "ui"
+ui_dir = "frontend/dist"
 cors = true
 
 [data]

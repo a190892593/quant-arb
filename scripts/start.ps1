@@ -22,12 +22,12 @@ if ($Build -or -not (Test-Path $exe)) {
     if (-not (Test-Path $exe)) { throw "backend executable not found: $exe" }
 }
 
-# 前端产物（ui/）不进版本库：缺失时自动构建一次
-$uiIndex = Join-Path $root 'ui\index.html'
+# 前端产物（frontend/dist）不进版本库：缺失时自动构建一次
+$uiIndex = Join-Path $root 'frontend\dist\index.html'
 if ($BuildUi -or -not (Test-Path $uiIndex)) {
-    Write-Host 'ui/index.html missing — building frontend (first run / clean clone) ...'
+    Write-Host 'frontend/dist/index.html missing — building frontend (first run / clean clone) ...'
     & (Join-Path $PSScriptRoot 'build-ui.ps1')
-    if (-not (Test-Path $uiIndex)) { throw "frontend build did not produce ui/index.html" }
+    if (-not (Test-Path $uiIndex)) { throw "frontend build did not produce frontend/dist/index.html" }
 }
 
 $dataDir = Join-Path $root 'data'
