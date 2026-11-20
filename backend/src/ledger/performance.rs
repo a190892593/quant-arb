@@ -553,7 +553,7 @@ mod tests {
             ),
             trade(
                 "e3",
-                StrategyType::CexDex,
+                StrategyType::DexCross,
                 "10",
                 "11",
                 "1",
@@ -666,7 +666,7 @@ mod tests {
         ));
         engine.record_trade(trade(
             "exec_2",
-            StrategyType::CexDex,
+            StrategyType::DexCross,
             "-10",
             "-9",
             "1",
@@ -722,8 +722,8 @@ mod tests {
         // 最大回撤金额 = 峰值 5028.5 − 谷值 5018.5
         assert_eq!(report.max_drawdown_usd, dec("10"));
 
-        // 三种策略恒出现，且明细求和等于合计。
-        assert_eq!(report.by_strategy.len(), 3);
+        // 两种 DEX 策略恒出现，且明细求和等于合计。
+        assert_eq!(report.by_strategy.len(), 2); // DEX 三角 + 跨池（CEX–DEX 已移除）
         let detail_net: Decimal = report.by_strategy.iter().map(|s| s.net_profit).sum();
         assert_eq!(detail_net, report.net_pnl);
         let detail_gross: Decimal = report.by_strategy.iter().map(|s| s.gross_profit).sum();
@@ -742,8 +742,8 @@ mod tests {
             .iter()
             .find(|s| s.strategy_type == StrategyType::DexCross)
             .unwrap();
-        assert_eq!(dex_cross.trades, 0);
-        assert_eq!(dex_cross.net_profit, Decimal::ZERO);
+        assert_eq!(dex_cross.trades, 1);
+        assert_eq!(dex_cross.net_profit, dec("-10"));
 
         // 分布：8 档，且计数总和等于成交数。
         assert_eq!(report.distribution.len(), 8);
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(report.win_rate, Decimal::ZERO);
         assert_eq!(report.profit_factor, Decimal::ZERO);
         assert_eq!(report.net_pnl, dec("12.5"));
-        assert_eq!(report.by_strategy.len(), 3);
+        assert_eq!(report.by_strategy.len(), 2); // DEX 三角 + 跨池（CEX–DEX 已移除）
         assert!(
             report
                 .by_strategy

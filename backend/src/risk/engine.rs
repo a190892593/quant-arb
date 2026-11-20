@@ -154,18 +154,10 @@ impl RiskEngine {
         catalog::group_params(self.params.clone())
     }
 
-    /// 最低净利润门槛：DEX = max(2, notional*10bps)；CEX-DEX = max(5, notional*30bps)。
-    pub fn min_profit_for(&self, strategy: StrategyType, notional: Decimal) -> Decimal {
-        let (usd_key, bps_key, usd_default, bps_default) = if strategy.is_atomic() {
-            ("dex_min_profit_usd", "dex_min_profit_bps", 2i64, 10i64)
-        } else {
-            (
-                "cex_dex_min_profit_usd",
-                "cex_dex_min_profit_bps",
-                5i64,
-                30i64,
-            )
-        };
+    /// 最低净利润门槛：max(2 USD, notional × 10bps)（仅 DEX 原子策略）。
+    pub fn min_profit_for(&self, _strategy: StrategyType, notional: Decimal) -> Decimal {
+        let (usd_key, bps_key, usd_default, bps_default) =
+            ("dex_min_profit_usd", "dex_min_profit_bps", 2i64, 10i64);
         let usd = self
             .find(usd_key)
             .map(|p| p.value)
@@ -280,97 +272,6 @@ impl RiskEngine {
             }
         }
 
-        // 4. CEX–DEX：盘口有效性、年龄、费率、深度占用与深度倍数。
-        if input.strategy == StrategyType::CexDex {
-            if input.book_valid == Some(false) {
-                record(
-                    &mut decision,
-                    violation(
-                        "book_valid",
-                        "CEX 盘口完整性",
-                        RiskSeverity::HardStop,
-                        Decimal::ONE,
-                        Decimal::ZERO,
-                        "bool",
-                        "CEX 盘口无效（序号缺口或未完成同步），禁止生成可执行机会",
-                    ),
-                );
-            }
-
-            let max_age = self.value("book_max_age_ms", &ctx, Decimal::from(250));
-            if let Some(age_ms) = input.book_age_ms {
-                let age = Decimal::from(age_ms.max(0));
-                if age > max_age {
-                    record(
-                        &mut decision,
-                        violation(
-                            "book_max_age_ms",
-                            "实时盘口最大年龄",
-                            self.param_sev("book_max_age_ms"),
-                            max_age,
-                            age,
-                            "ms",
-                            &format!("盘口年龄 {}ms 超过上限 {}ms，拒绝新机会", age, max_age),
-                        ),
-                    );
-                }
-            }
-
-            if input.fee_known == Some(false) {
-                record(
-                    &mut decision,
-                    violation(
-                        "fee_unknown_block",
-                        "CEX 费率未知",
-                        RiskSeverity::HardStop,
-                        Decimal::ONE,
-                        Decimal::ZERO,
-                        "bool",
-                        "CEX 费率未知，禁止生成可执行机会，需重新同步费率",
-                    ),
-                );
-            }
-
-            let usage_max = self.value("cex_depth_usage_max_pct", &ctx, Decimal::from(10));
-            if let Some(usage) = input.depth_usage_pct {
-                if usage > usage_max {
-                    record(
-                        &mut decision,
-                        violation(
-                            "cex_depth_usage_max_pct",
-                            "CEX 盘口深度占用上限",
-                            self.param_sev("cex_depth_usage_max_pct"),
-                            usage_max,
-                            usage,
-                            "%",
-                            &format!("盘口深度占用 {}% 超过上限 {}%", usage, usage_max),
-                        ),
-                    );
-                }
-            }
-
-            let multiple = self.value("cex_depth_multiple", &ctx, Decimal::from(10));
-            let required_depth = input.target_notional * multiple;
-            if let Some(depth) = input.book_depth_usd {
-                if depth < required_depth {
-                    record(
-                        &mut decision,
-                        violation(
-                            "cex_depth_multiple",
-                            "CEX 可见深度倍数",
-                            self.param_sev("cex_depth_multiple"),
-                            required_depth,
-                            depth,
-                            "USDC",
-                            &format!(
-                                "CEX 可见深度 {} USDC 低于订单金额的 {} 倍（至少需要 {} USDC）",
-                                depth, multiple, required_depth
-                            ),
-                        ),
-                    );
-                }
-            }
-        }
 
         // 5. 净利润门槛：不使用理论毛利润。
         // 分层：净利润 ≤ 0 → HARD STOP；0 < 净利润 < 执行门槛 → WARNING（观察，近失）。
@@ -453,17 +354,8 @@ impl RiskEngine {
         }
 
         // 7. 价格冲击：DEX 与 CEX–DEX 各有 20 bps 上限。
-        let (impact_key, impact_max) = if input.strategy.is_atomic() {
-            (
-                "dex_price_impact_max_bps",
-                self.value("dex_price_impact_max_bps", &ctx, Decimal::from(20)),
-            )
-        } else {
-            (
-                "cex_dex_price_impact_max_bps",
-                self.value("cex_dex_price_impact_max_bps", &ctx, Decimal::from(20)),
-            )
-        };
+        let impact_key = "dex_price_impact_max_bps";
+        let impact_max = self.value(impact_key, &ctx, Decimal::from(20));
         if input.price_impact_bps > impact_max {
             record(
                 &mut decision,
@@ -767,28 +659,6 @@ mod tests {
         i
     }
 
-    /// 一条可通过全部检查的 CEX–DEX 输入。
-    fn cex_dex_input() -> RiskInput {
-        let mut i = RiskInput::zero(StrategyType::CexDex);
-        i.chain_id = 1;
-        i.exchange = Some("binance".into());
-        i.symbol = Some("ETHUSDT".into());
-        i.tokens = vec!["USDC".into()];
-        i.target_notional = dec("400");
-        i.net_profit_usd = dec("10");
-        i.gross_profit_usd = dec("50");
-        i.gas_usd = dec("2");
-        i.price_impact_bps = dec("5");
-        i.book_valid = Some(true);
-        i.book_age_ms = Some(100);
-        i.book_depth_usd = Some(dec("100000"));
-        i.depth_usage_pct = Some(dec("1"));
-        i.fee_known = Some(true);
-        i.data_quality = DataQuality::Verified;
-        i.equity_usd = dec("5000");
-        i.peak_equity_usd = dec("5000");
-        i
-    }
 
     fn eval(input: &RiskInput) -> RiskDecision {
         engine().evaluate(input, &ControlState::new(), Utc::now())
@@ -813,15 +683,7 @@ mod tests {
             dec("0.001")
         );
         assert_eq!(
-            e.min_profit_for(StrategyType::CexDex, dec("1000")),
-            dec("0.001")
-        );
-        assert_eq!(
             e.min_profit_for(StrategyType::DexTriple, dec("100000")),
-            dec("0.1")
-        );
-        assert_eq!(
-            e.min_profit_for(StrategyType::CexDex, dec("100000")),
             dec("0.1")
         );
     }
@@ -833,10 +695,6 @@ mod tests {
         assert!(d.violations.is_empty());
         assert_eq!(d.param_version, "risk-v1.0.0");
         assert!(d.checked_at.timestamp() > 0);
-
-        let d = eval(&cex_dex_input());
-        assert!(d.allowed, "CEX–DEX 基线应放行: {:?}", d.violations);
-        assert!(d.violations.is_empty());
     }
 
     #[test]
@@ -860,36 +718,9 @@ mod tests {
     }
 
     #[test]
-    fn cex_book_checks_reject() {
-        let mut i = cex_dex_input();
-        i.book_valid = Some(false);
-        assert_rejected(&i, "book_valid");
-
-        let mut i = cex_dex_input();
-        i.book_age_ms = Some(9000);
-        assert_rejected(&i, "book_max_age_ms");
-
-        let mut i = cex_dex_input();
-        i.book_depth_usd = Some(dec("1000")); // 需要 400 * 10 = 4000
-        assert_rejected(&i, "cex_depth_multiple");
-
-        let mut i = cex_dex_input();
-        i.depth_usage_pct = Some(dec("10.5"));
-        assert_rejected(&i, "cex_depth_usage_max_pct");
-
-        let mut i = cex_dex_input();
-        i.fee_known = Some(false);
-        assert_rejected(&i, "fee_unknown_block");
-    }
-
-    #[test]
     fn profit_gate_rejects() {
         // 净利 ≤ 0：硬拒绝。
         let mut i = dex_input();
-        i.net_profit_usd = dec("-1");
-        assert_rejected(&i, "min_profit");
-
-        let mut i = cex_dex_input();
         i.net_profit_usd = dec("-1");
         assert_rejected(&i, "min_profit");
     }
@@ -905,11 +736,6 @@ mod tests {
             .warnings
             .iter()
             .any(|v| v.key == "min_profit" && v.severity == RiskSeverity::Warning));
-
-        let mut i = cex_dex_input();
-        i.net_profit_usd = dec("0.0001");
-        let d = eval(&i);
-        assert!(d.allowed);
     }
 
     #[test]
@@ -966,10 +792,6 @@ mod tests {
         let mut i = dex_input();
         i.price_impact_bps = dec("25");
         assert_rejected(&i, "dex_price_impact_max_bps");
-
-        let mut i = cex_dex_input();
-        i.price_impact_bps = dec("25");
-        assert_rejected(&i, "cex_dex_price_impact_max_bps");
     }
 
     #[test]

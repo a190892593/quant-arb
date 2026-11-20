@@ -77,7 +77,7 @@ const CONFIG = (data as unknown as { strategyConfig: Record<string, StrategyConf
 /* params where a larger value is the stricter choice */
 const TIGHTER_MIN: string[] = ["minNet", "cooldown", "minOutBuffer", "minTvl", "depthMultiple", "delayReserve", "competition"];
 
-const ORDER: Record<string, string> = { dex_triple: "S1", dex_cross: "S2", cex_dex: "S3" };
+const ORDER: Record<string, string> = { dex_triple: "S1", dex_cross: "S2" };
 
 const FOOT: string[] = [
   "覆盖规则不得突破全局硬限制：只能收紧，不能放宽。",

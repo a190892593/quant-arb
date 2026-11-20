@@ -438,20 +438,13 @@ pub async fn scan_once(state: &Arc<AppState>, execute: bool) -> anyhow::Result<u
 
     // ---- 执行（Paper）----
     if execute && state.config.paper.auto_execute {
-        // 交替选择策略：Paper 阶段需要同时覆盖「原子闭环」与「双腿对冲」两条链路，
-        // 否则高频的原子机会会长期挤占 CEX–DEX 的执行样本。
-        let executions_total = state.stats.read().await.executions_total;
-        let prefer_cex = executions_total % 2 == 1;
+        // 只做 DEX 原子策略：取净利最高的可执行机会。
         let actionable: Vec<Opportunity> = opps
             .iter()
             .filter(|o| o.status == OppStatus::Actionable && o.conservative_net_profit > Decimal::ZERO)
             .cloned()
             .collect();
-        let candidate = actionable
-            .iter()
-            .find(|o| (o.strategy_type == StrategyType::CexDex) == prefer_cex)
-            .or_else(|| actionable.first())
-            .cloned();
+        let candidate = actionable.first().cloned();
 
         if let Some(opp) = candidate {
             let p = state.config.paper.execute_probability;

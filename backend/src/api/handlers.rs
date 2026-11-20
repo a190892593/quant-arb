@@ -849,14 +849,9 @@ pub async fn paper_trades(State(state): State<Arc<AppState>>) -> ApiResult {
     Ok(Json(json!({ "trades": trades, "count": trades.len() })))
 }
 
-pub async fn paper_hedges(State(state): State<Arc<AppState>>) -> ApiResult {
-    let execs = state.executions.read().await;
-    let hedges: Vec<_> = execs
-        .iter()
-        .filter(|e| e.strategy_type == StrategyType::CexDex)
-        .cloned()
-        .collect();
-    Ok(Json(json!({ "hedges": hedges, "count": hedges.len() })))
+/// CEX–DEX 对冲策略已移除；该端点保留但恒为空，供旧前端兼容。
+pub async fn paper_hedges() -> ApiResult {
+    Ok(Json(json!({ "hedges": [], "count": 0 })))
 }
 
 pub async fn paper_performance(State(state): State<Arc<AppState>>) -> ApiResult {

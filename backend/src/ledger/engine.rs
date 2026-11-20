@@ -968,7 +968,7 @@ mod tests {
         pnl_ok.execution_id = Some("exec_1".to_string());
         engine.post(pnl_ok).unwrap();
         let mut pnl_bad = req(&rp, EntryKind::Pnl, "USDC", "-4", "1");
-        pnl_bad.strategy_type = Some(StrategyType::CexDex);
+        pnl_bad.strategy_type = Some(StrategyType::DexCross);
         engine.post(pnl_bad).unwrap();
         let mut gas_req = req(&gas, EntryKind::Gas, "USDC", "2", "1");
         gas_req.strategy_type = Some(StrategyType::DexTriple);
@@ -976,19 +976,11 @@ mod tests {
 
         assert_eq!(engine.realized_pnl(), dec("8"));
         assert_eq!(
-            engine.strategy_realized_pnl(StrategyType::DexTriple),
-            dec("12")
-        );
-        assert_eq!(
-            engine.strategy_realized_pnl(StrategyType::CexDex),
+            engine.strategy_realized_pnl(StrategyType::DexCross),
             dec("-4")
         );
-        assert_eq!(
-            engine.strategy_realized_pnl(StrategyType::DexCross),
-            Decimal::ZERO
-        );
         assert_eq!(engine.strategy_costs(StrategyType::DexTriple), dec("2"));
-        assert_eq!(engine.strategy_costs(StrategyType::CexDex), Decimal::ZERO);
+        assert_eq!(engine.strategy_costs(StrategyType::DexCross), Decimal::ZERO);
     }
 
     #[test]

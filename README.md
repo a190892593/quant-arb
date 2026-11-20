@@ -1,14 +1,16 @@
-# ARBX · 原子套利与 CEX–DEX 对冲交易系统（第一阶段实现）
+# ARBX · DEX 原子套利研究与 Paper 交易系统（第一阶段实现）
 
-本仓库是 `doc/` 下四份规格的**可运行实现**：本地优先（Local First）、Paper Trading、
+本仓库是 `docs/` 下规格与设计文档的**可运行实现**：本地优先（Local First）、Paper Trading、
 不广播链上交易、不提交真实 CEX 订单。年化收益目标不是验收承诺，系统也不保证盈利。
 
-- DEX 多池多跳扫描引擎需求：`doc/DEX 扫描引擎需求文档.md`
-- 本次扫描引擎升级说明：`doc/DEX扫描引擎技术升级说明.md`
-- 需求：`doc/产品需求规格说明书PRDv1.2.md`
-- 技术：`doc/总体技术设计说明书TDDv1.2.md`
-- 合约：`doc/执行合约详细设计 v1.0.md`
-- 风控：`doc/风控参数基线与熔断规则v1.0.md`
+- DEX 多池多跳扫描引擎需求：`docs/DEX 扫描引擎需求文档.md`
+- 本次扫描引擎升级说明：`docs/DEX扫描引擎技术升级说明.md`
+- 需求（当前）：`docs/产品需求规格说明书PRDv2.0.md`
+- 技术（当前）：`docs/总体技术设计说明书TDDv2.0.md`
+- 需求基线：`docs/产品需求规格说明书PRDv1.2.md`
+- 技术基线：`docs/总体技术设计说明书TDDv1.2.md`
+- 合约：`docs/执行合约详细设计 v1.0.md`
+- 风控：`docs/风控参数基线与熔断规则v1.0.md`
 - 前端设计契约：`DESIGN.md`
 
 ## 1. 快速开始
@@ -55,7 +57,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 | 统一 Paper Trading 引擎 | `backend/src/paper/`（DEX 模拟、CEX 深度成交、双腿状态机、补偿） | 完成 |
 | 策略账本与资金管理 | `backend/src/ledger/`（10 类账户、追加式流水、库存、对账、绩效） | 完成 |
 | 风控及熔断中心 | `backend/src/risk/`（49 项参数、覆盖只允许更严格、熔断窗口） | 完成 |
-| 执行合约设计与测试规范 | `doc/执行合约详细设计 v1.0.md`（设计层交付） | 未编码（见 §7） |
+| 执行合约设计与测试规范 | `docs/执行合约详细设计 v1.0.md`（设计层交付） | 未编码（见 §7） |
 | 前端仪表盘 | `frontend/`（React 19 + TS + Vite，构建后 `npm run publish` 到 `ui/`） | 完成 |
 | 本地启动/停止/备份/恢复 | `scripts/` | 完成 |
 | 审计与 Paper 报告 | `/api/audit/*`、`/api/paper/performance`、`arb-backend audit` | 完成 |
@@ -109,7 +111,7 @@ feed.tick → MarketView → StrategyEngine.scan
 - **风控在后端**：前端开关只发起请求，真正拦截在 `RiskEngine::evaluate`。
 - **DEX 成本口径**：AMM 手续费与滑点已含在成交价中，净利润只再扣 Gas、闪电贷、优先费、
   延迟/MEV 准备金等真实现金成本（旧实现重复扣减，新引擎已修正；见
-  `doc/DEX扫描引擎技术升级说明.md` §5）。
+  `docs/DEX扫描引擎技术升级说明.md` §5）。
 - **模拟等级诚实**：机会 `model_level` 最高为 M1（状态一致性），并附 M3 压力结果；
   本机未接入 REVM，M2 返回 `UNAVAILABLE`，生命周期不会出现 VERIFIED。
 - **生命周期与状态并行**：`status` 面向前端可执行性，`lifecycle` 面向审计；
@@ -282,7 +284,7 @@ cargo test          # 216 个测试（206 lib + 10 集成）
 
 ## 10. DEX 多池多跳引擎（本次升级）
 
-按 `doc/DEX 扫描引擎需求文档.md` 对原扫描功能做了整体替换：
+按 `docs/DEX 扫描引擎需求文档.md` 对原扫描功能做了整体替换：
 
 - **准入前置**：Token（UNKNOWN/OBSERVING/APPROVED/RESTRICTED/REJECTED）与 Pool（验证、
   执行白名单、TVL、状态年龄、流动性）不通过就不进图。
@@ -303,4 +305,4 @@ API：`GET /api/routes`、`/api/routes/{id}`、`/api/dex/graph`、`/api/scanner/
 前端入口：`#/routes`（路由搜索中心）。
 
 配置见 `config/default.toml` 的 `[dex_engine]`；`enabled = false` 可回退旧版三角/跨池扫描。
-完整设计、口径与限制见 [DEX 扫描引擎技术升级说明](doc/DEX扫描引擎技术升级说明.md)。
+完整设计、口径与限制见 [DEX 扫描引擎技术升级说明](docs/DEX扫描引擎技术升级说明.md)。

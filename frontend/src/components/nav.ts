@@ -40,7 +40,6 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "strategy:dex_triple", label: "三角套利", icon: "triangle", hash: "#/strategy/dex_triple" },
       { id: "strategy:dex_cross", label: "跨池套利", icon: "cross", hash: "#/strategy/dex_cross" },
-      { id: "strategy:cex_dex", label: "CEX–DEX 对冲", icon: "hedge", hash: "#/strategy/cex_dex" },
     ],
   },
   {

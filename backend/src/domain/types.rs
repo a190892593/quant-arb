@@ -65,7 +65,6 @@ str_enum! {
     pub enum StrategyType {
         DexTriple => "dex_triple",
         DexCross => "dex_cross",
-        CexDex => "cex_dex",
     }
 }
 
@@ -80,7 +79,6 @@ impl StrategyType {
         match self {
             StrategyType::DexTriple => "DEX 原子三角套利",
             StrategyType::DexCross => "DEX 原子跨池套利",
-            StrategyType::CexDex => "CEX–DEX 非原子对冲",
         }
     }
 }
@@ -606,7 +604,6 @@ mod tests {
     fn contract_strings_are_stable() {
         assert_eq!(StrategyType::DexTriple.as_str(), "dex_triple");
         assert_eq!(StrategyType::DexCross.as_str(), "dex_cross");
-        assert_eq!(StrategyType::CexDex.as_str(), "cex_dex");
         assert_eq!(ExecutionState::OrderStatusUnknown.as_str(), "ORDER_STATUS_UNKNOWN");
         assert_eq!(AccountKind::FlashClearing.as_str(), "FLASH_CLEARING");
     }
@@ -626,8 +623,6 @@ mod tests {
 
     #[test]
     fn serde_uses_contract_strings() {
-        let j = serde_json::to_string(&StrategyType::CexDex).unwrap();
-        assert_eq!(j, "\"cex_dex\"");
         let s: ExecutionState = serde_json::from_str("\"PARTIAL_HEDGE\"").unwrap();
         assert_eq!(s, ExecutionState::PartialHedge);
     }
@@ -635,7 +630,6 @@ mod tests {
     #[test]
     fn atomicity_semantics() {
         assert!(StrategyType::DexTriple.is_atomic());
-        assert!(!StrategyType::CexDex.is_atomic());
         assert!(ExecutionState::PartialHedge.is_exposed());
         assert!(ExecutionState::Reconciled.is_terminal());
         assert!(!DataQuality::Low.is_executable());

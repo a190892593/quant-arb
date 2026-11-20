@@ -23,8 +23,6 @@ export function Overview() {
   const equity = d.equity;
   const ret = ((equity - d.startEquity) / d.startEquity) * 100;
   const last30 = d.series.slice(-30);
-  const cexOpps = d.opps.filter((o) => o.strategy === 'cex_dex' && o.status === 'ACTIONABLE');
-  const exposure = Number(cexOpps.reduce((s, o) => s + o.notional, 0).toFixed(2));
 
   const rank: Record<string, number> = { ACTIONABLE: 0, WATCH: 1, REJECTED: 2, EXPIRED: 3, EXECUTED: 4 };
   const top = [...d.opps]
@@ -34,7 +32,6 @@ export function Overview() {
   const guards = [
     { label: "全局日亏损", cur: 12.4, lim: 50, pct: 24.8 },
     { label: "最大回撤", cur: d.maxDDusd, lim: 250, pct: (d.maxDDusd / 250) * 100 },
-    { label: "未对冲敞口", cur: 3.4, lim: 25, pct: 13.6 },
     { label: "场资金使用率", cur: 62, lim: 80, pct: 77.5 },
   ];
 
@@ -85,16 +82,6 @@ export function Overview() {
             <div className="kpi-foot">
               <span className="delta neg">{fmt.signed(-d.maxDDusd)}</span>
               <span>USDC · 上限 5.00%</span>
-            </div>
-          </div>
-          <div className="kpi">
-            <div className="kpi-label">未对冲敞口<span className="unit">CEX–DEX</span></div>
-            <div className="kpi-value">{fmt.num(exposure)}</div>
-            <div className="kpi-foot">
-              <span>上限 25.00 · 占用 13.6%</span>
-              <span className="kpi-spark" style={{ width: 64 }}>
-                <span className="bar bar--warn"><i style={{ width: "13.6%" }} /></span>
-              </span>
             </div>
           </div>
         </div>
