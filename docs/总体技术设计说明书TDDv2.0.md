@@ -8,7 +8,7 @@
 | 基线版本 | TDD v1.2 |
 | 适用代码 | `backend/`（Rust）、`frontend/`（React） |
 | 更新日期 | 2026-11-20 |
-| 修订 | commit 0720352：移除 CEX–DEX 扫描链路；commit ef33774：标价改用链上主源 + 净利双口径 |
+| 修订 | 0720352 移除 CEX 扫描；ef33774 标价链上主源 + 净利双口径；cece2f1 移除 CEX–DEX 非原子策略 |
 | 运行形态 | 本地双实例（Arbitrum 8791 / Base 8792） |
 | 交易阶段 | Research + Paper，Live 关闭 |
 
@@ -117,7 +117,7 @@ backend/src/
     dex_scan.rs            路线缓存、逐档、机会生成
     m2.rs                  QuoterV2 + M2-TX 原子回放
     cost.rs / scorer.rs    成本与评分
-    （cex_dex.rs 已于 0720352 删除）
+    （cex_dex.rs 于 0720352 删除；paper 的 execute_cex_dex / simulate_cex_leg / unwind_cex 于 cece2f1 删除）
   evm/
     rpc.rs                 多端点、批量、estimateGas
     fork.rs                ForkDb、代码/存储覆盖
@@ -541,18 +541,19 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
   - 仅在链上 spot 与 Chainlink 都缺该 Token 时参与标价（见 §7.4）；
   - 盘口深度仍用于数据质量对比与历史 Paper 回归展示；
 - `/api/opportunities` 只返回 `dex_triple` / `dex_cross`；
-- 历史 CEX–DEX Paper 执行/状态机代码保留用于回归，不参与新机会生成；
+- CEX–DEX Paper 执行链路（双腿模拟、部分成交回滚、对账窗口）已随策略删除（cece2f1）；`/api/paper/hedges` 保留但恒返回空；
 - 前端 `#/scanner-cex` 重定向到 `#/scanner-dex`，能力矩阵标记为 `off`。
 
 ---
 
 ## 15. Paper、账本与风控
 
-- 账户：DEX/CEX/现金/费用；
+- 账户：DEX/CEX/现金/费用（CEX 账户保留以兼容历史账本）；
+- 执行链路：**只保留 DEX 原子执行**（`execute_dex_atomic`），CEX 双腿路径已删除；
 - 复式记账：每笔执行成对分录；
 - 库存快照按执行更新；
 - 绩效：权益、回撤、胜率、盈亏比；
-- 风控：规则目录、参数、覆盖、暂停/恢复、事件；
+- 风控：规则目录（33 项参数、6 组）、覆盖、暂停/恢复、事件；§4.2 CEX–DEX 对冲与 §7 双腿对冲执行两组参数已随策略移除；
 - 审计：任务/报告/数据质量/模型等级。
 
 ---
@@ -607,7 +608,7 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 - React 19 + TS strict；hash 路由；无图表库（SVG 手写）；
 - 导航分组：监控 MONITOR / 搜索 SEARCH / 交易 PAPER / 策略 STRATEGY / 研究 RESEARCH / 治理 GOVERN；
 - 页面：Overview、RouteSearch（DEX–DEX 搜索引擎）、DataSources、Pools、Executions、Accounts、Performance、Strategy、Audit、DataQuality、Ledger、Risk、Contract、System、Capability；
-- `#/scanner-cex` 旧链接重定向到 `#/scanner-dex`；CEX–DEX 只在策略说明页保留“已下线”状态；
+- `#/scanner-cex` 旧链接重定向到 `#/scanner-dex`；导航不再提供 CEX–DEX 策略入口；
 
 ### 17.1 DEX–DEX 搜索引擎页（原「路线搜索」与「DEX 原子扫描」合并）
 
@@ -672,7 +673,7 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 ### 20.1 当前结果
 
 - `cargo test`：**206 lib + 11 集成 = 217 通过**；
-- 集成：`cex_dex_flow` 3（仅 Paper 状态机回归）、`multihop_scan` 3、`paper_flow` 5；
+- 集成：`multihop_scan` 3、`paper_flow` 5（`cex_dex_flow` 随策略删除）；
 - 前端 `tsc` 通过、`npm run publish` 成功。
 
 ### 20.2 关键测试
@@ -681,7 +682,7 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 - 稳定曲线：单调、手续费、不均衡、链上样本；
 - V3 跨 tick：单调、跨 tick、流动性耗尽上界；
 - Paper：开户、成交、对冲、账本、重置；
-- CEX–DEX Paper 状态机（历史回归）：基差、费用、库存、回滚；扫描能力已移除；
+- ~~CEX–DEX Paper 状态机~~：随策略移除（cece2f1），用例与集成测试一并删除；
 - 风控：规则、熔断、覆盖。
 
 ### 20.3 手工/探针验证
@@ -715,7 +716,7 @@ uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes data)
 | 公共 RPC | 429/批限制/连接重置，需专用节点 |
 | 稳定池路线 | 曲线正确，但价格偏离，未进入闭环 |
 | 6–8 跳 / BSC | 明确不做 |
-| CEX–DEX 扫描 | 已移除（commit 0720352）；CEX 仅保留行情数据作为标价第三票与展示 |
+| CEX–DEX 策略 | 已整体移除（0720352 移除扫描、cece2f1 移除枚举/执行/风控参数组/用例）；CEX 仅保留行情数据作为标价第三票与展示 |
 | 标价分歧阈值 | 固定 50 bps 硬编码；后续改为可配置并接入风控参数表 |
 | Chainlink 覆盖 | 仅 ETH/BTC/LINK/ARB/USDC 五个 feed；其余 Token 只有链上 spot 与 CEX 两票 |
 | 标价喂给 TVL | 池 TVL 在链上标价刷新完成前使用上一轮值（滞后一个 feed 周期，约 2–6 s） |

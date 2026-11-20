@@ -8,7 +8,7 @@
 | 基线版本 | PRD v1.2 |
 | 适用代码 | `arb-backend` v0.1.0 / `arbx-frontend` v0.1.0 |
 | 更新日期 | 2026-11-20 |
-| 修订 | commit 0720352：移除 CEX–DEX 扫描链路；commit ef33774：标价链上主源 + 净利双口径 + 搜索配置抽屉 |
+| 修订 | commit 0720352 移除 CEX 扫描；ef33774 标价链上主源 + 净利双口径；cece2f1 移除 CEX–DEX 非原子策略 |
 | 运行阶段 | Research + Paper Trading（Live 关闭） |
 | 适用读者 | 产品、策略研究、后端、前端、测试、风控 |
 
@@ -73,16 +73,18 @@
 
 - 同一 Token 对在不同 DEX/费率池之间的价差；
 - 与策略 A 共用图搜索、成本模型与风控；
-- 路线类型包括 `CROSS_POOL`、`TRIANGLE`、`MULTI_HOP`。
+- 路线类型包括 `CROSS_POOL`、`TRIANGLE`、`MULTI_HOP`；
 
-### 2.4 CEX 公共行情的角色（非策略）
+> v2.0 策略面只有 A、B 两类（`StrategyType` 仅含 `dex_triple` / `dex_cross`）。CEX–DEX 非原子对冲已整体移除，不再作为策略存在。
+
+### 2.4 CEX 公共行情的角色（非策略，仅数据）
 
 - Binance 公共盘口仍保留，但**降为标价第三票**：
   - 标价主源改为链上最深计价池 spot 价（见 §6.2）；
   - Chainlink 聚合价做交叉校验；
   - Binance 中间价仅在链上/Chainlink 都缺该 Token 时兜底；
   - 盘口深度仍用于数据质量对比与历史 Paper 回归展示。
-- 不再扫描 CEX–DEX 机会，不再生成 `StrategyType::CexDex` 机会；
+- **CEX–DEX 非原子套利策略已整体移除**（commit cece2f1）：`StrategyType::CexDex` 枚举、执行链路、风控参数组一并删除；
 - `/api/opportunities` 只返回 DEX 原子机会（`dex_triple` / `dex_cross`）；
 - `#/scanner-cex` 旧链接重定向到 `#/scanner-dex`。
 
@@ -233,7 +235,7 @@
 - 用途：**标价第三票/兜底**（主源见 §6.2）、数据质量对比、历史回归；
 - **不生成 CEX–DEX 机会**；
 - 旧 `#/scanner-cex` 书签自动落到 DEX 搜索页；
-- 历史 CEX–DEX Paper 记录与状态机代码保留，仅用于回归/展示，不参与新扫描。
+- CEX–DEX 执行链路（双腿模拟、部分成交回滚、对账窗口）已随策略一并删除；`/api/paper/hedges` 保留但恒返回空。
 
 ### 5.8 Paper Trading（FR-PAPER）
 
@@ -344,7 +346,7 @@ net_usd   = 净利 = 回款 − 投入 − 显式成本     # 美元口径，含
 | Paper 执行 | `#/executions` | 执行记录与状态机 |
 | 账户与库存 | `#/accounts` | 余额、持仓、库存 |
 | 绩效 | `#/performance` | 权益曲线、回撤、统计 |
-| 策略 | `#/strategy/*` | 三角/跨池；CEX–DEX 仅保留下线说明页 |
+| 策略 | `#/strategy/*` | 三角 / 跨池两页；CEX–DEX 策略页已随策略移除（导航不再出现，旧链接回落到搜索页） |
 | 池与 Token | `#/pools` | 池状态、ticks、准入 |
 | 历史审计 | `#/audit` | 审计任务/报告 |
 | 数据质量 | `#/dataquality` | RPC/盘口/池年龄 + **标价源面板**（三源分歧） |
@@ -386,7 +388,7 @@ net_usd   = 净利 = 回款 − 投入 − 显式成本     # 美元口径，含
 
 ### 8.3 测试验收
 
-- `cargo test`：**206 lib + 11 集成 = 217 通过**；
+- `cargo test`：**205 lib + 8 集成 = 213 通过**（CEX–DEX 用例随策略删除：-1 集成文件 / -12 lib 用例）；
 - 前端 `tsc` 通过，`npm run publish` 成功；
 - 关键路径 headless 验证：链筛选/链列存在，无控制台错误。
 
@@ -447,8 +449,8 @@ net_usd   = 净利 = 回款 − 投入 − 显式成本     # 美元口径，含
 | V3 | 单区间 | tick bitmap/ticks 加载（Base） |
 | M2 | QuoterV2 | QuoterV2 + 闪电池 executor + estimateGas |
 | UI | 基础监控 | 链/档位筛选、档位矩阵、数据源配置 |
-| 测试 | 约 216 | 217（含 CEX–DEX Paper 回归 3 项） |
-| CEX–DEX 扫描 | 有 | 移除（仅保留 CEX 行情作为标价第三票） |
+| 测试 | 约 216 | 213（CEX–DEX Paper 回归已随策略删除） |
+| CEX–DEX 策略 | 有（非原子双腿对冲） | **整体移除**：枚举、执行链路、风控参数组、Paper 用例全部删除；CEX 只留行情作标价第三票 |
 | 标价来源 | Binance 中间价为主 | **链上稳定币池 spot 为主** + Chainlink 校验 + Binance 兜底，三源分歧可观测 |
 | 净利口径 | 仅 USD | **USD + 起始资产双口径**，可拆分价差缺口与执行成本 |
 | 搜索配置 | 10 项内联面板 | **25 项 / 六组抽屉**，含成本与安全垫、压力模型、投入阶梯 |
