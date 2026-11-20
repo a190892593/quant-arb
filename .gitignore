@@ -5,6 +5,14 @@
 /instances/*/data/
 !/instances/*/config/
 /backups/
+
+# SQLite 与备份快照：任何位置的数据库文件都不进版本库
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
 /.build/
 *.log
 dom*.html
