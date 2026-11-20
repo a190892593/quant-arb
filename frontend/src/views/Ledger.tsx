@@ -37,7 +37,6 @@ const GROSS_PROFIT = 22.72;
 const STRATEGY_BOOK = [
   { label: "DEX 三角", trades: "96", fee: "−168.40", net: "+84.20" },
   { label: "DEX 跨池", trades: "64", fee: "−102.60", net: "+41.35" },
-  { label: "CEX–DEX 对冲", trades: "54", fee: "−121.90", net: "+57.08" },
 ];
 
 const RULES = [

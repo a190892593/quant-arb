@@ -256,7 +256,7 @@ const rng = makeRng(20261119);
   const STRATEGY = {
     dex_triple: { label: "DEX 三角", short: "三角", color: "accent" },
     dex_cross: { label: "DEX 跨池", short: "跨池", color: "accent" },
-    cex_dex: { label: "CEX–DEX 对冲", short: "对冲", color: "warn" }
+    cex_dex: { label: "CEX–DEX 对冲（已下线）", short: "已下线", color: "muted" }
   };
   const CHAIN = {
     arbitrum: { label: "Arbitrum", id: 42161 },
@@ -410,8 +410,7 @@ const rng = makeRng(20261119);
     { group: "全局", items: [{ id: "global", label: "全局执行", on: true }] },
     { group: "策略", items: [
       { id: "s-triple", label: "DEX 三角", on: true },
-      { id: "s-cross", label: "DEX 跨池", on: true },
-      { id: "s-hedge", label: "CEX–DEX 对冲", on: true }
+      { id: "s-cross", label: "DEX 跨池", on: true }
     ] },
     { group: "链", items: [
       { id: "c-arb", label: "Arbitrum", on: true },
@@ -900,65 +899,6 @@ const rng = makeRng(20261119);
         { at: "11-17 16:40", by: "operator", change: "价格冲击上限 25 → 20 bps" }
       ]
     },
-    cex_dex: {
-      id: "cex_dex", name: "CEX–DEX 非原子套利", family: "链外对冲",
-      thesis: "两条腿分别成交，不存在共同原子提交；任一腿的部分成交、回滚或状态未知都必须显式处置。",
-      mode: "PAPER", enabled: true, version: "cfg-2026.11.19-b4",
-      kpi: [
-        { label: "今日机会", value: "9", note: "检出 → 风控通过 1" },
-        { label: "未对冲敞口", value: "3.40", note: "上限 25.00 USDC", tone: "warn" },
-        { label: "今日净利", value: "+7.58", note: "已扣双边费用与准备金", tone: "pos" },
-        { label: "对冲完成", value: "25.0%", note: "今日 8 笔执行", tone: "neg" }
-      ],
-      groups: [
-        {
-          name: "利润与成本门槛",
-          note: "保守净利润，含延迟与补偿准备金",
-          items: [
-            { key: "minNet", label: "最低保守净利润", value: 7.50, unit: "USDC", min: 5, max: 50, step: 0.5, global: 5.00 },
-            { key: "depthMultiple", label: "深度倍数要求", value: 10, unit: "倍", min: 5, max: 50, step: 1, global: 10 },
-            { key: "delayReserve", label: "延迟风险准备金", value: 35, unit: "bps", min: 0, max: 100, step: 5, global: 0 }
-          ]
-        },
-        {
-          name: "规模与容量",
-          items: [
-            { key: "maxNotional", label: "单笔名义上限", value: 2500, unit: "USDC", min: 250, max: 10000, step: 250, global: 5000 },
-            { key: "maxExposure", label: "未对冲敞口上限", value: 25, unit: "USDC", min: 5, max: 100, step: 5, global: 25 },
-            { key: "rebalanceBudget", label: "再平衡预算", value: 2.00, unit: "USDC", min: 0, max: 20, step: 0.5, global: 0 }
-          ]
-        },
-        {
-          name: "数据与时效",
-          items: [
-            { key: "bookAge", label: "盘口最大年龄", value: 250, unit: "ms", min: 50, max: 500, step: 25, global: 250 },
-            { key: "maxUnhedgedSec", label: "最大未对冲时间", value: 2.0, unit: "s", min: 0.5, max: 5, step: 0.5, global: 2.0 },
-            { key: "queryWindow", label: "状态未知查询窗口", value: 2.0, unit: "s", min: 0.5, max: 5, step: 0.5, global: 2.0 }
-          ]
-        },
-        {
-          name: "执行方式",
-          items: [
-            { key: "protectBps", label: "保护价偏离", value: 10, unit: "bps", min: 1, max: 30, step: 1, global: 10 },
-            { key: "maxReprice", label: "最大重新报价", value: 1, unit: "次", min: 0, max: 3, step: 1, global: 1 },
-            { key: "compLossMax", label: "补偿最大亏损", value: 3.00, unit: "USDC", min: 1, max: 20, step: 0.5, global: 0 }
-          ]
-        }
-      ],
-      toggles: [
-        { key: "dexFirst", label: "允许 DEX 先行", on: true, note: "A 组：链上先成交", locked: false },
-        { key: "cexFirst", label: "允许 CEX 先行", on: true, note: "B 组：盘口先成交", locked: false },
-        { key: "partialReplan", label: "部分成交后按实际量重算另一腿", on: true, note: "硬性要求", locked: true },
-        { key: "autoComp", label: "允许自动补偿", on: true, note: "受补偿最大亏损约束", locked: false },
-        { key: "noResend", label: "状态未知时禁止重发", on: true, note: "硬性要求", locked: true },
-        { key: "perp", label: "允许永续 / 杠杆", on: false, note: "第一阶段不启用", locked: true }
-      ],
-      history: [
-        { at: "11-19 16:41", by: "operator", change: "最低保守净利润 7.00 → 7.50" },
-        { at: "11-18 13:05", by: "operator", change: "补偿最大亏损 2.00 → 3.00" },
-        { at: "11-15 09:30", by: "system", change: "参数冻结 cfg-2026.11.15-b1" }
-      ]
-    }
   };
 
   /* ---------- DEX route search space (this round) ---------- */

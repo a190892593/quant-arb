@@ -137,7 +137,7 @@ export function Risk() {
               <div className="killswitch-sub">
                 {paused
                   ? "全局暂停已生效：所有策略停止生成可执行计划，已有持仓与 Paper 订单仍可查询。"
-                  : "全链路监控中：DEX 原子、CEX–DEX 对冲与数据源健康检查均正常。"}
+                  : "全链路监控中：DEX 原子套利与数据源健康检查均正常。"}
               </div>
             </div>
           </div>

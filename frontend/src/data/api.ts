@@ -198,9 +198,7 @@ function mapOpportunity(o: Raw): Opportunity {
     : symbol ?? "—";
 
   const venue =
-    strategy === "cex_dex"
-      ? `${(cex ?? "CEX").toUpperCase()} · ${legsRaw.map((l) => poolName(str(l.pool_id))).join(" · ")}`
-      : Array.from(new Set(legsRaw.map((l) => poolName(str(l.pool_id))))).join(" · ") || chainLabel;
+    Array.from(new Set(legsRaw.map((l) => poolName(str(l.pool_id))))).join(" · ") || chainLabel;
   const pairLabel =
     strategy === "cex_dex"
       ? str(o.direction) === "DEX_BUY_CEX_SELL"
@@ -296,7 +294,7 @@ function mapOpportunity(o: Raw): Opportunity {
     capacity: num(o.capacity_usd),
     costTotal,
     net,
-    minProfit: Math.max(strategy === "cex_dex" ? 5 : 2, notional * (strategy === "cex_dex" ? 0.003 : 0.001)),
+    minProfit: Math.max(2, notional * 0.001),
     netBps: notional ? (net / notional) * 10000 : 0,
     theoBps: num(o.theoretical_edge_bps),
     gasRatio: gross > 0 ? Math.max(0, ((costs.gas + costs.priority) / gross) * 100) : 0,
@@ -327,7 +325,7 @@ function mapExecution(e: Raw): Execution {
     oppId: shortId(str(e.opportunity_id), "OPP"),
     strategy,
     chain: chainOf(e.chain_id),
-    cex: strategy === "cex_dex" ? "Binance" : undefined,
+    cex: undefined,
     symbol: e.symbol ? pairOf(str(e.symbol)) : undefined,
     pair:
       strategy === "cex_dex"

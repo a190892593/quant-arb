@@ -21,7 +21,6 @@ interface StrategyRow {
 const STRATEGIES: StrategyRow[] = [
   { key: "dex_triple", label: "DEX 三角套利", trades: 96, net: 84.2, win: 71.9, avg: 0.88 },
   { key: "dex_cross", label: "DEX 跨池套利", trades: 64, net: 41.35, win: 64.1, avg: 0.65 },
-  { key: "cex_dex", label: "CEX–DEX 对冲", trades: 54, net: 57.08, win: 61.1, avg: 1.06 },
 ];
 
 const NET_TOTAL = 182.63;

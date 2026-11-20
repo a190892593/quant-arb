@@ -1,6 +1,6 @@
 /** domain model shared with the Rust backend contracts (TDD §6.1 / §10) */
 
-export type StrategyId = "dex_triple" | "dex_cross" | "cex_dex";
+export type StrategyId = "dex_triple" | "dex_cross" | "cex_dex"; // cex_dex 仅用于历史记录展示，已不产生新机会
 export type OppStatus = "ACTIONABLE" | "WATCH" | "REJECTED" | "EXPIRED" | "EXECUTED";
 /** data_quality: A/B/C 为可执行等级，D 与 INVALID 由后端用于拒绝 */
 export type Quality = "A" | "B" | "C" | "D" | "INVALID";
